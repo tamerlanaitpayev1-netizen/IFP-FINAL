@@ -1,0 +1,83 @@
+@using Microsoft.AspNetCore.Components.Web
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <title>ArenaQuiz — Real-Time Quiz Platform</title>
+    <ResourcePreloader />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="@Assets["lib/bootstrap/dist/css/bootstrap.min.css"]" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="stylesheet" href="@Assets["ArenaQuiz.styles.css"]" />
+    <ImportMap />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <HeadOutlet @rendermode="InteractiveWebAssembly" />
+</head>
+
+<body>
+    <Routes @rendermode="InteractiveWebAssembly" />
+
+    <script>
+        window.arenaStorage = {
+            set: (k, v) => { try { sessionStorage.setItem(k, v); } catch { } },
+            get: (k) => { try { return sessionStorage.getItem(k); } catch { return null; } },
+            clear: () => {
+                try {
+                    sessionStorage.removeItem('aq_room');
+                    sessionStorage.removeItem('aq_nick');
+                    sessionStorage.removeItem('aq_token');
+                } catch { }
+            }
+        };
+
+        window.arenaAudio = (() => {
+            let ctx = null;
+            const ensureCtx = () => {
+                if (!ctx && (window.AudioContext || window.webkitAudioContext)) {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    ctx = new AudioCtx();
+                }
+                if (ctx && ctx.state === 'suspended') {
+                    ctx.resume().catch(() => { });
+                }
+                return ctx;
+            };
+
+            const beep = (freq, duration, type = 'sine', gainVal = 0.08, delay = 0) => {
+                const c = ensureCtx();
+                if (!c) return;
+                const osc = c.createOscillator();
+                const gain = c.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, c.currentTime + delay);
+                gain.gain.setValueAtTime(gainVal, c.currentTime + delay);
+                gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + delay + duration);
+                osc.connect(gain);
+                gain.connect(c.destination);
+                osc.start(c.currentTime + delay);
+                osc.stop(c.currentTime + delay + duration);
+            };
+
+            return {
+                playTone: (cue) => {
+                    try {
+                        if (cue === 'join') { beep(523.25, 0.09, 'triangle', 0.06, 0); beep(659.25, 0.12, 'triangle', 0.06, 0.07); }
+                        else if (cue === 'tick') { beep(880, 0.05, 'sine', 0.04, 0); }
+                        else if (cue === 'correct') { beep(523.25, 0.10, 'triangle', 0.08, 0); beep(659.25, 0.10, 'triangle', 0.08, 0.08); beep(783.99, 0.16, 'triangle', 0.08, 0.16); }
+                        else if (cue === 'wrong') { beep(240, 0.14, 'sawtooth', 0.05, 0); beep(180, 0.20, 'sawtooth', 0.05, 0.10); }
+                        else if (cue === 'podium') { beep(523.25, 0.11, 'triangle', 0.07, 0); beep(659.25, 0.11, 'triangle', 0.07, 0.10); beep(783.99, 0.11, 'triangle', 0.07, 0.20); beep(1046.5, 0.26, 'triangle', 0.08, 0.30); }
+                    } catch { }
+                }
+            };
+        })();
+    </script>
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+</body>
+
+</html>

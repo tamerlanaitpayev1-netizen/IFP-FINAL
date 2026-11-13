@@ -1,0 +1,68 @@
+@using ArenaQuiz.Shared.Functional
+@using ArenaQuiz.Shared.Models
+
+<section class="aq-card" aria-label="Connected players">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.85rem;">
+        <h3 style="margin:0; font-size:1.05rem; font-weight:700;">
+            Lobby Roster
+        </h3>
+        <span class="aq-badge aq-badge-neutral tabular">@Players.Count joined</span>
+    </div>
+
+    @if (Players.Count == 0)
+    {
+        <div class="aq-card-elevated" style="text-align:center; color:var(--text-secondary); padding:1.5rem;">
+            Waiting for players to enter the Room PIN from desktop or mobile...
+        </div>
+    }
+    else
+    {
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:0.65rem;">
+            @foreach (var player in Players)
+            {
+                <div class="aq-leaderboard-row">
+                    <div style="display:flex; align-items:center; gap:0.55rem; min-width:0;">
+                        <span style="width:9px; height:9px; border-radius:999px; flex-shrink:0; background-color:@(player.IsConnected ? "#10B981" : "#9CA3AF");"
+                              title="@(player.IsConnected ? "Connected" : "Disconnected")"></span>
+                        <div style="min-width:0;">
+                            <div style="font-weight:700; font-size:0.92rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                                @player.Nickname
+                            </div>
+                            @if (Mode == GameMode.TeamBattle && player.Team != TeamSide.None)
+                            {
+                                <div style="font-size:0.75rem; color:var(--text-secondary);">
+                                    @ScoreEngine.FormatTeamName(player.Team)
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    @if (IsHost)
+                    {
+                        <button type="button"
+                                class="aq-btn aq-btn-secondary aq-btn-sm"
+                                title="Remove @player.Nickname"
+                                @onclick="() => OnRemovePlayer.InvokeAsync(player.PlayerId)">
+                            Kick
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter]
+    public IReadOnlyList<PlayerStandingDto> Players { get; set; } = [];
+
+    [Parameter]
+    public bool IsHost { get; set; }
+
+    [Parameter]
+    public GameMode Mode { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnRemovePlayer { get; set; }
+}
+

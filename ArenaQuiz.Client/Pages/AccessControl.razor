@@ -1,0 +1,142 @@
+@page "/auth"
+@inject QuizApiClient Api
+@inject GameStateContainer GameState
+
+<PageTitle>Role-Based Access Control — ArenaQuiz</PageTitle>
+
+<div class="aq-enter" style="display:flex; flex-direction:column; gap:1.25rem;">
+    <section class="aq-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+            <div>
+                <h1 style="margin:0; font-size:1.6rem; font-weight:700;">Role-Based Access Control (RBAC)</h1>
+                <div style="font-size:0.9rem; color:var(--text-secondary);">
+                    Active session: <strong>@GameState.CurrentUser.FullName</strong> (@GameState.CurrentUser.Role)
+                </div>
+            </div>
+            <span class="aq-badge @(GameState.CurrentUser.Role == UserRole.Host ? "aq-badge-cobalt" : "aq-badge-emerald")">
+                Role: @GameState.CurrentUser.Role
+            </span>
+        </div>
+    </section>
+
+    <div class="aq-grid-2">
+        <section class="aq-card">
+            <h2 style="margin:0 0 0.75rem; font-size:1.15rem; font-weight:700;">Quick Role Switch (Demo Accounts)</h2>
+            <p style="margin:0 0 1rem; color:var(--text-secondary); font-size:0.9rem;">
+                Instantly switch between seeded SQLite accounts to verify Host vs Player permissions during the defense.
+            </p>
+            <div style="display:flex; flex-direction:column; gap:0.65rem;">
+                <button type="button" class="aq-btn aq-btn-dark" @onclick='() => SwitchAsync("tamerlan")'>
+                    Switch to Тамерлан (Host)
+                </button>
+                <button type="button" class="aq-btn aq-btn-secondary" @onclick='() => SwitchAsync("dias")'>
+                    Switch to Диас (Host)
+                </button>
+                <button type="button" class="aq-btn aq-btn-secondary" @onclick='() => SwitchAsync("student")'>
+                    Switch to Игрок АИТУ (Player)
+                </button>
+            </div>
+        </section>
+
+        <section class="aq-card">
+            <h2 style="margin:0 0 0.75rem; font-size:1.15rem; font-weight:700;">Sign In with Credentials</h2>
+            <div style="display:flex; flex-direction:column; gap:0.75rem;">
+                <div>
+                    <label class="aq-label" for="auth-user">Username</label>
+                    <input id="auth-user" class="aq-input" placeholder="tamerlan / dias / student" @bind="_username" />
+                </div>
+                <div>
+                    <label class="aq-label" for="auth-pass">Password</label>
+                    <input id="auth-pass" type="password" class="aq-input" placeholder="host123 or play123" @bind="_password" />
+                </div>
+                <button type="button" class="aq-btn aq-btn-primary" @onclick="LoginAsync">
+                    Authenticate
+                </button>
+
+                @if (!string.IsNullOrWhiteSpace(_feedback))
+                {
+                    <div class="aq-badge @(_ok ? "aq-badge-emerald" : "aq-badge-crimson")" style="padding:0.55rem 0.75rem; border-radius:var(--radius-sm);">
+                        @_feedback
+                    </div>
+                }
+            </div>
+        </section>
+    </div>
+
+    <section class="aq-card">
+        <h2 style="margin:0 0 0.75rem; font-size:1.15rem; font-weight:700;">Permission Matrix</h2>
+        <div style="overflow-x:auto;">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Capability</th>
+                        <th>Host (Тамерлан / Диас)</th>
+                        <th>Player (Игрок АИТУ)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Join rooms by PIN &amp; submit real-time answers</td>
+                        <td>Allowed</td>
+                        <td>Allowed</td>
+                    </tr>
+                    <tr>
+                        <td>Create quizzes in SQLite &amp; manage Host Studio</td>
+                        <td>Allowed</td>
+                        <td>Restricted</td>
+                    </tr>
+                    <tr>
+                        <td>Launch SignalR rooms, start rounds, kick players</td>
+                        <td>Allowed</td>
+                        <td>Restricted</td>
+                    </tr>
+                    <tr>
+                        <td>View Analytics &amp; Export CSV reports</td>
+                        <td>Allowed</td>
+                        <td>Allowed (Read-only)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+
+@code {
+    private string _username = string.Empty;
+    private string _password = string.Empty;
+    private string? _feedback;
+    private bool _ok;
+
+    private async Task SwitchAsync(string username)
+    {
+        var res = await Api.QuickSwitchAsync(username);
+        if (res.IsSuccess && res.Value is not null)
+        {
+            GameState.SetUserSession(res.Value);
+            _ok = true;
+            _feedback = $"Switched active identity to {res.Value.FullName} ({res.Value.Role}).";
+        }
+        else
+        {
+            _ok = false;
+            _feedback = res.Error ?? "Failed to switch account.";
+        }
+    }
+
+    private async Task LoginAsync()
+    {
+        var res = await Api.LoginAsync(new LoginRequest(_username, _password));
+        if (res.IsSuccess && res.Value is not null)
+        {
+            GameState.SetUserSession(res.Value);
+            _ok = true;
+            _feedback = $"Authenticated as {res.Value.FullName} ({res.Value.Role}).";
+        }
+        else
+        {
+            _ok = false;
+            _feedback = res.Error ?? "Invalid credentials.";
+        }
+    }
+}
+

@@ -1,0 +1,26 @@
+@using Microsoft.AspNetCore.SignalR.Client
+
+@if (GameState is not null && !string.IsNullOrWhiteSpace(GameState.LastError))
+{
+    <div class="aq-card" style="margin-bottom:1rem; border-color:var(--crimson-border); background-color:var(--crimson-bg); color:var(--crimson-text); display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
+        <div>
+            <strong>Notice:</strong> @GameState.LastError
+        </div>
+        <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => GameState.ClearError()">
+            Dismiss
+        </button>
+    </div>
+}
+
+@if (GameState is not null && GameState.ConnectionState == HubConnectionState.Reconnecting)
+{
+    <div class="aq-card" style="margin-bottom:1rem; border-color:var(--amber-border); background-color:var(--amber-bg); color:var(--amber-text);">
+        <strong>SignalR Reconnecting...</strong> Restoring live WebSocket stream automatically.
+    </div>
+}
+
+@code {
+    [CascadingParameter]
+    public GameStateContainer? GameState { get; set; }
+}
+

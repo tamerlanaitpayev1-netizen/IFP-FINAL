@@ -1,0 +1,139 @@
+@page "/analytics"
+@inject QuizApiClient Api
+
+<PageTitle>History &amp; CSV Analytics — ArenaQuiz</PageTitle>
+
+<div class="aq-enter" style="display:flex; flex-direction:column; gap:1.25rem;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+        <div>
+            <h1 style="margin:0; font-size:1.65rem; font-weight:700;">Session History &amp; Analytics</h1>
+            <div style="font-size:0.9rem; color:var(--text-secondary);">
+                Persisted in SQLite via Entity Framework Core with RFC-4180 CSV export.
+            </div>
+        </div>
+        <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="LoadAsync">
+            Refresh Data
+        </button>
+    </div>
+
+    @if (_overview is null)
+    {
+        <div class="aq-card">Loading analytics from SQLite...</div>
+    }
+    else
+    {
+        <section class="aq-grid-4">
+            <div class="aq-card">
+                <div class="aq-label">Sessions Played</div>
+                <div class="tabular font-display" style="font-size:1.8rem; font-weight:700;">@_overview.TotalSessionsPlayed</div>
+            </div>
+            <div class="aq-card">
+                <div class="aq-label">Total Participants</div>
+                <div class="tabular font-display" style="font-size:1.8rem; font-weight:700;">@_overview.TotalParticipants</div>
+            </div>
+            <div class="aq-card">
+                <div class="aq-label">Global Accuracy</div>
+                <div class="tabular font-display" style="font-size:1.8rem; font-weight:700;">@_overview.GlobalAccuracyPercent%</div>
+            </div>
+            <div class="aq-card">
+                <div class="aq-label">Top Quiz</div>
+                <div style="font-size:1.05rem; font-weight:700; margin-top:0.25rem;">@_overview.MostPopularQuiz</div>
+            </div>
+        </section>
+
+        <TemplatedMetricGrid TItem="SessionHistoryDto"
+                             Items="_overview.RecentSessions"
+                             EmptyMessage="No completed quiz sessions recorded yet.">
+            <HeaderTemplate>
+                <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
+                    <h2 style="margin:0; font-size:1.15rem; font-weight:700;">Completed Sessions</h2>
+                    <span class="aq-badge aq-badge-neutral">Templated Component (&lt;TemplatedMetricGrid&gt;)</span>
+                </div>
+            </HeaderTemplate>
+            <RowTemplate Context="session">
+                <div class="aq-card-elevated">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; flex-wrap:wrap;">
+                        <div>
+                            <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                                <span class="tabular" style="font-family:var(--font-mono); font-weight:700;">@session.RoomCode</span>
+                                <span class="aq-badge aq-badge-cobalt">@session.Mode</span>
+                                <span class="aq-badge aq-badge-emerald tabular">Accuracy @session.AverageAccuracyPercent%</span>
+                            </div>
+                            <div style="font-weight:700; font-size:1.05rem; margin-top:0.35rem;">@session.QuizTitle</div>
+                            <div style="font-size:0.84rem; color:var(--text-secondary);" class="tabular">
+                                Host: @session.HostName &middot; Winner: <strong>@session.WinnerNickname</strong> (@session.WinnerScore pts) &middot; @session.ParticipantCount players
+                            </div>
+                        </div>
+
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <button type="button"
+                                    class="aq-btn aq-btn-secondary aq-btn-sm"
+                                    @onclick="() => ToggleDetails(session.SessionId)">
+                                @(_expandedSessionId == session.SessionId ? "Hide Breakdown" : "View Breakdown")
+                            </button>
+                            <a href="@($"api/sessions/{session.SessionId}/export.csv")"
+                               target="_blank"
+                               class="aq-btn aq-btn-dark aq-btn-sm">
+                                Export CSV
+                            </a>
+                        </div>
+                    </div>
+
+                    @if (_expandedSessionId == session.SessionId)
+                    {
+                        <div style="margin-top:0.85rem; overflow-x:auto;">
+                            <table class="table table-sm mb-0" style="font-size:0.86rem;">
+                                <thead>
+                                    <tr>
+                                        <th>Rank</th>
+                                        <th>Player</th>
+                                        <th>Team</th>
+                                        <th>Score</th>
+                                        <th>Correct</th>
+                                        <th>Best Streak</th>
+                                        <th>Avg Speed</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var r in session.Results)
+                                    {
+                                        <tr>
+                                            <td class="tabular">#@r.FinalRank</td>
+                                            <td><strong>@r.Nickname</strong></td>
+                                            <td>@r.TeamName</td>
+                                            <td class="tabular">@r.FinalScore</td>
+                                            <td class="tabular">@r.CorrectAnswers / @r.TotalQuestions</td>
+                                            <td class="tabular">@r.BestStreak x</td>
+                                            <td class="tabular">@((r.AverageResponseMs / 1000.0).ToString("F2"))s</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            </RowTemplate>
+        </TemplatedMetricGrid>
+    }
+</div>
+
+@code {
+    private AnalyticsOverviewDto? _overview;
+    private Guid? _expandedSessionId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _overview = await Api.GetAnalyticsAsync();
+    }
+
+    private void ToggleDetails(Guid sessionId)
+    {
+        _expandedSessionId = _expandedSessionId == sessionId ? null : sessionId;
+    }
+}
+

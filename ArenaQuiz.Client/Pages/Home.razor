@@ -1,0 +1,210 @@
+@page "/"
+@inject QuizApiClient Api
+@inject GameStateContainer GameState
+@inject NavigationManager Navigation
+
+<PageTitle>ArenaQuiz — Live Real-Time Quiz Platform</PageTitle>
+
+<div class="aq-enter" style="display:flex; flex-direction:column; gap:1.5rem;">
+    <section class="aq-grid-2" style="align-items:stretch;">
+        <div class="aq-card" style="display:flex; flex-direction:column; justify-content:space-between; gap:1rem;">
+            <div>
+                <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.65rem;">
+                    <span class="aq-badge aq-badge-accent">SignalR Real-Time</span>
+                    <span class="aq-badge aq-badge-neutral">.NET 10 Blazor WASM</span>
+                </div>
+                <h1 style="font-size:clamp(1.7rem, 3.2vw, 2.35rem); margin:0 0 0.65rem; font-weight:700; line-height:1.15;">
+                    Multiplayer Quiz Arena Built for Speed and Integrity.
+                </h1>
+                <p style="margin:0; color:var(--text-secondary); font-size:1rem;">
+                    Host live quizzes with server-authoritative anti-cheat timers, Classic Speed, Team Battle, and Knockout Elimination modes across desktop, tablet, and mobile.
+                </p>
+            </div>
+
+            <div style="display:flex; flex-wrap:wrap; gap:0.65rem;">
+                <a href="host" class="aq-btn aq-btn-dark">
+                    Open Host Studio
+                </a>
+                <a href="analytics" class="aq-btn aq-btn-secondary">
+                    History &amp; CSV Export
+                </a>
+            </div>
+        </div>
+
+        <div class="aq-card">
+            <h2 style="margin:0 0 0.85rem; font-size:1.2rem; font-weight:700;">Join a Live Room</h2>
+            <div style="display:flex; flex-direction:column; gap:0.85rem;">
+                <div>
+                    <label class="aq-label" for="home-pin">Room PIN</label>
+                    <input id="home-pin"
+                           class="aq-input aq-pin-input"
+                           placeholder="AQ4829"
+                           maxlength="8"
+                           @bind="_roomCode"
+                           @bind:event="oninput" />
+                </div>
+
+                <div class="aq-grid-2" style="gap:0.75rem;">
+                    <div>
+                        <label class="aq-label" for="home-nick">Nickname</label>
+                        <input id="home-nick"
+                               class="aq-input"
+                               placeholder="e.g. Amina_CS"
+                               maxlength="24"
+                               @bind="_nickname" />
+                    </div>
+                    <div>
+                        <label class="aq-label" for="home-team">Team (if Team Battle)</label>
+                        <select id="home-team" class="aq-select" @bind="_preferredTeam">
+                            <option value="@TeamSide.None">Auto-Balance</option>
+                            <option value="@TeamSide.Alpha">Team Alpha</option>
+                            <option value="@TeamSide.Beta">Team Beta</option>
+                            <option value="@TeamSide.Gamma">Team Gamma</option>
+                        </select>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_joinError))
+                {
+                    <div class="aq-badge aq-badge-crimson" style="border-radius:var(--radius-sm); padding:0.55rem 0.75rem;">
+                        @_joinError
+                    </div>
+                }
+
+                <button type="button"
+                        class="aq-btn aq-btn-primary"
+                        disabled="@_isJoining"
+                        @onclick="JoinFromHomeAsync">
+                    @(_isJoining ? "Connecting..." : "Join Arena")
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="aq-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.85rem;">
+            <div>
+                <h2 style="margin:0; font-size:1.15rem; font-weight:700;">Active Open Lobbies</h2>
+                <div style="font-size:0.84rem; color:var(--text-secondary);">Click a room below to pre-fill its PIN and join immediately.</div>
+            </div>
+            <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="RefreshOpenRoomsAsync">
+                Refresh Rooms
+            </button>
+        </div>
+
+        @if (_openRooms.Count == 0)
+        {
+            <div class="aq-card-elevated" style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+                <span style="color:var(--text-secondary);">No live rooms are open right now. Launch one in Host Studio to test live gameplay.</span>
+                <a href="host" class="aq-btn aq-btn-primary aq-btn-sm">Create Room</a>
+            </div>
+        }
+        else
+        {
+            <div class="aq-grid-3">
+                @foreach (var room in _openRooms)
+                {
+                    <div class="aq-card-elevated" style="display:flex; flex-direction:column; justify-content:space-between; gap:0.75rem;">
+                        <div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                                <span class="tabular" style="font-family:var(--font-mono); font-weight:700; font-size:1.05rem;">@room.RoomCode</span>
+                                <span class="aq-badge aq-badge-emerald">@room.Phase</span>
+                            </div>
+                            <div style="font-weight:700; margin-top:0.35rem;">@room.QuizTitle</div>
+                            <div style="font-size:0.82rem; color:var(--text-secondary);">
+                                Host: @room.HostName &middot; @room.PlayerCount players &middot; @room.Mode
+                            </div>
+                        </div>
+                        <button type="button"
+                                class="aq-btn aq-btn-dark aq-btn-sm"
+                                @onclick="() => SelectRoomPin(room.RoomCode)">
+                            Use PIN @room.RoomCode
+                        </button>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="aq-card">
+        <h2 style="margin:0 0 0.85rem; font-size:1.15rem; font-weight:700;">Available Quiz Library (@_quizzes.Count)</h2>
+        <div class="aq-grid-3">
+            @foreach (var quiz in _quizzes)
+            {
+                <div class="aq-card-elevated" style="display:flex; flex-direction:column; justify-content:space-between; gap:0.65rem;">
+                    <div>
+                        <span class="aq-badge aq-badge-cobalt">@quiz.Category</span>
+                        <h3 style="margin:0.5rem 0 0.35rem; font-size:1.02rem; font-weight:700;">@quiz.Title</h3>
+                        <p style="margin:0; font-size:0.86rem; color:var(--text-secondary);">@quiz.Description</p>
+                    </div>
+                    <div style="font-size:0.8rem; color:var(--text-secondary); display:flex; justify-content:space-between;" class="tabular">
+                        <span>@quiz.QuestionCount questions &middot; ~@quiz.DefaultTimeLimitSeconds s</span>
+                        <span>by @quiz.CreatedBy</span>
+                    </div>
+                </div>
+            }
+        </div>
+    </section>
+</div>
+
+@code {
+    private string _roomCode = string.Empty;
+    private string _nickname = string.Empty;
+    private TeamSide _preferredTeam = TeamSide.None;
+    private string? _joinError;
+    private bool _isJoining;
+    private IReadOnlyList<OpenRoomSummaryDto> _openRooms = [];
+    private IReadOnlyList<QuizSummaryDto> _quizzes = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshOpenRoomsAsync();
+        _quizzes = await Api.GetQuizzesAsync();
+    }
+
+    private async Task RefreshOpenRoomsAsync()
+    {
+        try
+        {
+            _openRooms = await Api.GetOpenRoomsAsync();
+        }
+        catch
+        {
+            _openRooms = [];
+        }
+    }
+
+    private void SelectRoomPin(string code)
+    {
+        _roomCode = code;
+    }
+
+    private async Task JoinFromHomeAsync()
+    {
+        _joinError = null;
+        if (string.IsNullOrWhiteSpace(_roomCode))
+        {
+            _joinError = "Enter a room PIN (e.g., AQ4829).";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_nickname) || _nickname.Trim().Length < 2)
+        {
+            _joinError = "Enter a nickname (at least 2 characters).";
+            return;
+        }
+
+        _isJoining = true;
+        var res = await GameState.JoinRoomAsync(_roomCode, _nickname, _preferredTeam);
+        _isJoining = false;
+
+        if (res.IsSuccess)
+        {
+            Navigation.NavigateTo("play");
+        }
+        else
+        {
+            _joinError = res.Error ?? "Could not join room.";
+        }
+    }
+}

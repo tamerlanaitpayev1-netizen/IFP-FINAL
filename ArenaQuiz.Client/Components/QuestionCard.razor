@@ -1,0 +1,141 @@
+@using ArenaQuiz.Shared.Models
+
+<section class="aq-card aq-enter" aria-label="Question card">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.85rem;">
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <span class="aq-badge aq-badge-neutral tabular">
+                Question @(Question.QuestionIndex + 1) / @Question.TotalQuestions
+            </span>
+            <span class="aq-badge aq-badge-cobalt">
+                @FormatMode(Question.Mode)
+            </span>
+        </div>
+        <span class="aq-badge aq-badge-amber tabular">
+            Up to @Question.BasePoints pts
+        </span>
+    </div>
+
+    <h2 style="font-size:clamp(1.18rem, 2.3vw, 1.55rem); margin:0 0 0.5rem; font-weight:700;">
+        @Question.Prompt
+    </h2>
+
+    @if (!string.IsNullOrWhiteSpace(Question.CodeSnippet))
+    {
+        <pre class="aq-code-block"><code>@Question.CodeSnippet</code></pre>
+    }
+
+    <div class="aq-options-grid">
+        @for (int i = 0; i < Question.Options.Count; i++)
+        {
+            int optionIndex = i;
+            string optionText = Question.Options[optionIndex];
+            bool isSelected = SelectedOptionIndex == optionIndex;
+            bool isCorrect = Reveal is not null && Reveal.CorrectOptionIndex == optionIndex;
+            bool isWrongSelection = Reveal is not null && isSelected && Reveal.CorrectOptionIndex != optionIndex;
+            bool isDimmed = Reveal is not null && !isCorrect && !isWrongSelection;
+
+            string stateClass = isCorrect
+                ? "aq-option-correct"
+                : isWrongSelection
+                    ? "aq-option-wrong"
+                    : isSelected
+                        ? "aq-option-selected"
+                        : isDimmed
+                            ? "aq-option-dimmed"
+                            : string.Empty;
+
+            int votes = Reveal is not null && optionIndex < Reveal.OptionVoteCounts.Count
+                ? Reveal.OptionVoteCounts[optionIndex]
+                : 0;
+            int totalVotes = Reveal is not null ? Math.Max(1, Reveal.OptionVoteCounts.Sum()) : 1;
+            double votePct = Reveal is not null ? Math.Round(votes * 100.0 / totalVotes, 0) : 0;
+
+            <button type="button"
+                    class="aq-option-btn @stateClass"
+                    disabled="@(IsHostView || Reveal is not null || SelectedOptionIndex.HasValue || IsDisabled)"
+                    @onclick="() => SelectOptionAsync(optionIndex)">
+                <span class="aq-option-shape aq-shape-@(optionIndex % 4)" aria-hidden="true">
+                    @switch (optionIndex % 4)
+                    {
+                        case 0:
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 4 21 19 3 19"></polygon></svg>
+                            break;
+                        case 1:
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 3 21 12 12 21 3 12"></polygon></svg>
+                            break;
+                        case 2:
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"></circle></svg>
+                            break;
+                        default:
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>
+                            break;
+                    }
+                </span>
+
+                <span style="flex:1; min-width:0;">
+                    <span style="display:block;">@optionText</span>
+                    @if (Reveal is not null)
+                    {
+                        <span style="display:flex; justify-content:space-between; font-size:0.78rem; margin-top:0.25rem; opacity:0.85;" class="tabular">
+                            <span>@votes @(votes == 1 ? "vote" : "votes")</span>
+                            <span>@votePct%</span>
+                        </span>
+                        <span class="aq-vote-bar-track" style="display:block;">
+                            <span class="aq-vote-bar-fill" style="display:block; width:@($"{votePct}%");"></span>
+                        </span>
+                    }
+                </span>
+            </button>
+        }
+    </div>
+
+    @if (Reveal is not null && !string.IsNullOrWhiteSpace(Reveal.Explanation))
+    {
+        <div class="aq-card-elevated" style="margin-top:1rem;">
+            <div style="font-size:0.78rem; font-weight:700; text-transform:uppercase; color:var(--text-secondary); letter-spacing:0.04em;">
+                Technical Explanation
+            </div>
+            <p style="margin:0.35rem 0 0; color:var(--text-primary); font-size:0.94rem;">
+                @Reveal.Explanation
+            </p>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public LiveQuestionViewDto Question { get; set; } = default!;
+
+    [Parameter]
+    public QuestionRevealDto? Reveal { get; set; }
+
+    [Parameter]
+    public int? SelectedOptionIndex { get; set; }
+
+    [Parameter]
+    public bool IsHostView { get; set; }
+
+    [Parameter]
+    public bool IsDisabled { get; set; }
+
+    [Parameter]
+    public EventCallback<int> OnOptionSelected { get; set; }
+
+    private async Task SelectOptionAsync(int index)
+    {
+        if (IsHostView || Reveal is not null || SelectedOptionIndex.HasValue || IsDisabled)
+        {
+            return;
+        }
+        await OnOptionSelected.InvokeAsync(index);
+    }
+
+    private static string FormatMode(GameMode mode) => mode switch
+    {
+        GameMode.ClassicSpeed => "Classic Speed",
+        GameMode.TeamBattle => "Team Battle",
+        GameMode.KnockoutElimination => "Knockout",
+        _ => mode.ToString()
+    };
+}
+

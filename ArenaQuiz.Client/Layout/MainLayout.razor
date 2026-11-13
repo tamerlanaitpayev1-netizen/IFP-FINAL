@@ -1,0 +1,73 @@
+@inherits LayoutComponentBase
+@inject GameStateContainer GameState
+@inject SoundService Sound
+@implements IDisposable
+
+<CascadingValue Value="GameState" IsFixed="true">
+    <div class="aq-shell">
+        <header class="aq-topbar">
+            <div class="aq-topbar-inner">
+                <a class="aq-brand" href="">
+                    <span class="aq-brand-mark" aria-hidden="true">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                        </svg>
+                    </span>
+                    <span>ArenaQuiz</span>
+                </a>
+
+                <NavMenu />
+
+                <div class="aq-topbar-actions">
+                    <button type="button"
+                            class="aq-btn aq-btn-secondary aq-btn-sm"
+                            title="@(Sound.IsMuted ? "Unmute sound cues" : "Mute sound cues")"
+                            @onclick="ToggleMute">
+                        @if (Sound.IsMuted)
+                        {
+                            <span>Audio Off</span>
+                        }
+                        else
+                        {
+                            <span>Audio On</span>
+                        }
+                    </button>
+
+                    <a href="auth" class="aq-badge @(GameState.CurrentUser.Role == UserRole.Host ? "aq-badge-cobalt" : "aq-badge-emerald")" style="text-decoration:none;">
+                        <span>@GameState.CurrentUser.FullName</span>
+                    </a>
+                </div>
+            </div>
+        </header>
+
+        <main class="aq-main">
+            <ConnectionStatusBanner />
+            @Body
+        </main>
+    </div>
+</CascadingValue>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unexpected error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">X</span>
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        GameState.OnStateChanged += HandleStateChanged;
+    }
+
+    private void ToggleMute()
+    {
+        Sound.ToggleMute();
+    }
+
+    private void HandleStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        GameState.OnStateChanged -= HandleStateChanged;
+    }
+}

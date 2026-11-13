@@ -1,0 +1,59 @@
+<div class="aq-timer-pill" style="display:inline-flex; align-items:center; gap:0.7rem; padding:0.45rem 0.85rem; border-radius:999px; border:1px solid @(IsUrgent ? "var(--crimson-border)" : "var(--border-subtle)"); background-color:@(IsUrgent ? "var(--crimson-bg)" : "var(--bg-surface)"); color:@(IsUrgent ? "var(--crimson-text)" : "var(--text-primary)");">
+    <svg width="28" height="28" viewBox="0 0 36 36" aria-hidden="true">
+        <circle cx="18" cy="18" r="15" fill="none" stroke="var(--border-subtle)" stroke-width="3.5" />
+        <circle cx="18" cy="18" r="15" fill="none"
+                stroke="@(IsUrgent ? "var(--crimson-text)" : "var(--accent-primary)")"
+                stroke-width="3.5"
+                stroke-linecap="round"
+                stroke-dasharray="94.25"
+                stroke-dashoffset="@DashOffset.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)"
+                transform="rotate(-90 18 18)" />
+    </svg>
+    <div style="line-height:1.1;">
+        <div style="font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; opacity:0.8;">
+            Server Timer
+        </div>
+        <div class="tabular font-display" style="font-size:1.15rem; font-weight:700;">
+            @RemainingSeconds s
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public int RemainingSeconds { get; set; }
+
+    [Parameter]
+    public int TotalSeconds { get; set; } = 20;
+
+    [Parameter]
+    public EventCallback OnTimerExpired { get; set; }
+
+    private int _lastFiredForZero = -1;
+
+    private bool IsUrgent => RemainingSeconds <= 5;
+
+    private double DashOffset
+    {
+        get
+        {
+            double safeTotal = Math.Max(1, TotalSeconds);
+            double fraction = Math.Clamp(RemainingSeconds / safeTotal, 0.0, 1.0);
+            return 94.25 * (1.0 - fraction);
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (RemainingSeconds <= 0 && _lastFiredForZero != TotalSeconds && OnTimerExpired.HasDelegate)
+        {
+            _lastFiredForZero = TotalSeconds;
+            await OnTimerExpired.InvokeAsync();
+        }
+        else if (RemainingSeconds > 0)
+        {
+            _lastFiredForZero = -1;
+        }
+    }
+}
+
