@@ -1,0 +1,26 @@
+# .NET / Visual Studio / Rider / VS Code
+bin/
+obj/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# SQLite local runtime files
+*.db
+*.db-shm
+*.db-wal
+
+# Test & publish artifacts
+TestResults/
+publish/
+*.trx
+*.coverage
+*.zip
+.DS_Store
+
+repomix-output
+repomix-output.xml
