@@ -27,3 +27,4 @@ jobs:
 
       - name: Run xUnit & bUnit tests with code coverage
         run: dotnet test ArenaQuiz.sln --configuration Release --no-build --collect:"XPlat Code Coverage" --logger "console;verbosity=normal"
+
