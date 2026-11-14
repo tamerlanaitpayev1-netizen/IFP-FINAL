@@ -1,92 +1,99 @@
 @page "/analytics"
 @inject QuizApiClient Api
+@inject LocalizationService Loc
+@implements IDisposable
 
-<PageTitle>History &amp; CSV Analytics — ArenaQuiz</PageTitle>
+<PageTitle>@Loc.T("analytics.title") — ArenaQuiz</PageTitle>
 
-<div class="aq-enter" style="display:flex; flex-direction:column; gap:1.25rem;">
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+<section class="aq-stack-lg">
+    <div class="aq-row-between">
         <div>
-            <h1 style="margin:0; font-size:1.65rem; font-weight:700;">Session History &amp; Analytics</h1>
-            <div style="font-size:0.9rem; color:var(--text-secondary);">
-                Persisted in SQLite via Entity Framework Core with RFC-4180 CSV export.
-            </div>
+            <h1 class="aq-heading-lg">@Loc.T("analytics.title")</h1>
+            <p class="aq-text-muted">Historical match standings, participant accuracy telemetry, and toughest questions.</p>
         </div>
-        <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="LoadAsync">
-            Refresh Data
-        </button>
+        @if (_overview?.RecentSessions.Count > 0)
+        {
+            <a class="aq-btn aq-btn-secondary aq-btn-sm"
+               href="api/sessions/@_overview.RecentSessions[0].SessionId/export.csv"
+               download="arenaquiz-latest.csv">
+                @Loc.T("analytics.export") (Latest)
+            </a>
+        }
     </div>
 
-    @if (_overview is null)
+    @if (_loading)
     {
-        <div class="aq-card">Loading analytics from SQLite...</div>
+        <div class="aq-card aq-empty-state">Loading match analytics...</div>
+    }
+    else if (_overview is null)
+    {
+        <div class="aq-alert aq-alert-crimson">Could not retrieve analytics telemetry from the server.</div>
     }
     else
     {
-        <section class="aq-grid-4">
+        <div class="aq-grid-4 aq-enter">
             <div class="aq-card">
-                <div class="aq-label">Sessions Played</div>
-                <div class="tabular font-display" style="font-size:1.8rem; font-weight:700;">@_overview.TotalSessionsPlayed</div>
+                <span class="aq-label">Matches Completed</span>
+                <div class="aq-kpi-value tabular">@_overview.TotalSessionsPlayed</div>
             </div>
             <div class="aq-card">
-                <div class="aq-label">Total Participants</div>
-                <div class="tabular font-display" style="font-size:1.8rem; font-weight:700;">@_overview.TotalParticipants</div>
+                <span class="aq-label">Total Participants</span>
+                <div class="aq-kpi-value tabular">@_overview.TotalParticipants</div>
             </div>
             <div class="aq-card">
-                <div class="aq-label">Global Accuracy</div>
-                <div class="tabular font-display" style="font-size:1.8rem; font-weight:700;">@_overview.GlobalAccuracyPercent%</div>
+                <span class="aq-label">Global Accuracy</span>
+                <div class="aq-kpi-value tabular">@($"{_overview.GlobalAccuracyPercent:F1}%")</div>
             </div>
             <div class="aq-card">
-                <div class="aq-label">Top Quiz</div>
-                <div style="font-size:1.05rem; font-weight:700; margin-top:0.25rem;">@_overview.MostPopularQuiz</div>
+                <span class="aq-label">Most Played Deck</span>
+                <div class="aq-heading-md aq-mt-sm">@_overview.MostPopularQuiz</div>
             </div>
-        </section>
+        </div>
 
         <TemplatedMetricGrid TItem="SessionHistoryDto"
-                             Items="_overview.RecentSessions"
-                             EmptyMessage="No completed quiz sessions recorded yet.">
+                             Items="@_overview.RecentSessions"
+                             EmptyMessage="No finished matches recorded yet. Run a live session in Host Studio to populate history.">
             <HeaderTemplate>
-                <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
-                    <h2 style="margin:0; font-size:1.15rem; font-weight:700;">Completed Sessions</h2>
-                    <span class="aq-badge aq-badge-neutral">Templated Component (&lt;TemplatedMetricGrid&gt;)</span>
+                <div class="aq-row-between">
+                    <h2 class="aq-heading-md">Recent Completed Matches</h2>
+                    <span class="aq-badge aq-badge-neutral tabular">@_overview.RecentSessions.Count sessions</span>
                 </div>
             </HeaderTemplate>
-            <RowTemplate Context="session">
-                <div class="aq-card-elevated">
-                    <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; flex-wrap:wrap;">
-                        <div>
-                            <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
-                                <span class="tabular" style="font-family:var(--font-mono); font-weight:700;">@session.RoomCode</span>
-                                <span class="aq-badge aq-badge-cobalt">@session.Mode</span>
-                                <span class="aq-badge aq-badge-emerald tabular">Accuracy @session.AverageAccuracyPercent%</span>
-                            </div>
-                            <div style="font-weight:700; font-size:1.05rem; margin-top:0.35rem;">@session.QuizTitle</div>
-                            <div style="font-size:0.84rem; color:var(--text-secondary);" class="tabular">
-                                Host: @session.HostName &middot; Winner: <strong>@session.WinnerNickname</strong> (@session.WinnerScore pts) &middot; @session.ParticipantCount players
-                            </div>
-                        </div>
 
-                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-                            <button type="button"
-                                    class="aq-btn aq-btn-secondary aq-btn-sm"
-                                    @onclick="() => ToggleDetails(session.SessionId)">
-                                @(_expandedSessionId == session.SessionId ? "Hide Breakdown" : "View Breakdown")
-                            </button>
-                            <a href="@($"api/sessions/{session.SessionId}/export.csv")"
-                               target="_blank"
-                               class="aq-btn aq-btn-dark aq-btn-sm">
-                                Export CSV
+            <RowTemplate Context="session">
+                <article class="aq-card aq-card-elevated aq-stack-sm">
+                    <div class="aq-row-between">
+                        <div class="aq-stack-xs">
+                            <div class="aq-row-wrap">
+                                <strong>@session.QuizTitle</strong>
+                                <span class="aq-badge aq-badge-cobalt">@FormatMode(session.Mode)</span>
+                                <span class="aq-badge aq-badge-neutral font-mono-code">PIN @session.RoomCode</span>
+                            </div>
+                            <span class="aq-text-xs">
+                                Host: @session.HostName · Winner: <strong>@session.WinnerNickname</strong> (@session.WinnerScore pts) ·
+                                @session.FinishedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                            </span>
+                        </div>
+                        <div class="aq-row-wrap">
+                            <span class="aq-badge aq-badge-emerald tabular">
+                                @($"{session.AverageAccuracyPercent:F1}%") accuracy · @session.ParticipantCount players
+                            </span>
+                            <a class="aq-btn aq-btn-secondary aq-btn-sm"
+                               href="api/sessions/@session.SessionId/export.csv"
+                               download="arenaquiz-@(session.RoomCode).csv">
+                                @Loc.T("analytics.export")
                             </a>
                         </div>
                     </div>
 
-                    @if (_expandedSessionId == session.SessionId)
+                    @if (session.Results.Count > 0)
                     {
-                        <div style="margin-top:0.85rem; overflow-x:auto;">
-                            <table class="table table-sm mb-0" style="font-size:0.86rem;">
+                        <div class="aq-table-wrap">
+                            <table class="aq-table">
                                 <thead>
                                     <tr>
                                         <th>Rank</th>
-                                        <th>Player</th>
+                                        <th>Nickname</th>
                                         <th>Team</th>
                                         <th>Score</th>
                                         <th>Correct</th>
@@ -95,45 +102,98 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    @foreach (var r in session.Results)
+                                    @foreach (var r in session.Results.Take(8))
                                     {
                                         <tr>
                                             <td class="tabular">#@r.FinalRank</td>
-                                            <td><strong>@r.Nickname</strong></td>
+                                            <td>
+                                                <strong>@r.Nickname</strong>
+                                                @if (r.WasEliminated)
+                                                {
+                                                    <span class="aq-badge aq-badge-crimson">KO</span>
+                                                }
+                                            </td>
                                             <td>@r.TeamName</td>
                                             <td class="tabular">@r.FinalScore</td>
-                                            <td class="tabular">@r.CorrectAnswers / @r.TotalQuestions</td>
-                                            <td class="tabular">@r.BestStreak x</td>
-                                            <td class="tabular">@((r.AverageResponseMs / 1000.0).ToString("F2"))s</td>
+                                            <td class="tabular">@r.CorrectAnswers/@r.TotalQuestions</td>
+                                            <td class="tabular">@($"{r.BestStreak}x")</td>
+                                            <td class="tabular">@($"{(r.AverageResponseMs / 1000.0):F2}s")</td>
                                         </tr>
                                     }
                                 </tbody>
                             </table>
                         </div>
                     }
-                </div>
+                </article>
             </RowTemplate>
         </TemplatedMetricGrid>
+
+        @if (_overview.QuestionStats is { Count: > 0 })
+        {
+            <section class="aq-card aq-stack-sm">
+                <div class="aq-row-between">
+                    <h2 class="aq-heading-md">@Loc.T("analytics.hardest")</h2>
+                    <span class="aq-badge aq-badge-amber">Lowest accuracy first</span>
+                </div>
+
+                <div class="aq-table-wrap">
+                    <table class="aq-table">
+                        <thead>
+                            <tr>
+                                <th>Quiz</th>
+                                <th>Question Prompt</th>
+                                <th>Correct / Attempts</th>
+                                <th>Accuracy</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var stat in _overview.QuestionStats)
+                            {
+                                <tr>
+                                    <td>@stat.QuizTitle</td>
+                                    <td>@stat.Prompt</td>
+                                    <td class="tabular">@stat.CorrectAttempts / @stat.TotalAttempts</td>
+                                    <td class="tabular">
+                                        <span class="aq-badge @(stat.AccuracyPercent < 50 ? "aq-badge-crimson" : stat.AccuracyPercent < 75 ? "aq-badge-amber" : "aq-badge-emerald")">
+                                            @($"{stat.AccuracyPercent:F1}%")
+                                        </span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
     }
-</div>
+</section>
 
 @code {
     private AnalyticsOverviewDto? _overview;
-    private Guid? _expandedSessionId;
+    private bool _loading = true;
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadAsync();
+        Loc.OnLanguageChanged += HandleLanguageChanged;
+        try
+        {
+            _overview = await Api.GetAnalyticsAsync();
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private async Task LoadAsync()
+    private static string FormatMode(GameMode mode) => mode switch
     {
-        _overview = await Api.GetAnalyticsAsync();
-    }
+        GameMode.ClassicSpeed => "Classic Speed",
+        GameMode.TeamBattle => "Team Battle",
+        GameMode.KnockoutElimination => "Knockout",
+        _ => mode.ToString()
+    };
 
-    private void ToggleDetails(Guid sessionId)
-    {
-        _expandedSessionId = _expandedSessionId == sessionId ? null : sessionId;
-    }
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Loc.OnLanguageChanged -= HandleLanguageChanged;
 }
-

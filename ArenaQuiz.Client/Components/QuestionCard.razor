@@ -1,8 +1,8 @@
 @using ArenaQuiz.Shared.Models
 
 <section class="aq-card aq-enter" aria-label="Question card">
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.85rem;">
-        <div style="display:flex; align-items:center; gap:0.5rem;">
+    <div class="aq-row-between aq-mb-md">
+        <div class="aq-row-wrap">
             <span class="aq-badge aq-badge-neutral tabular">
                 Question @(Question.QuestionIndex + 1) / @Question.TotalQuestions
             </span>
@@ -15,9 +15,7 @@
         </span>
     </div>
 
-    <h2 style="font-size:clamp(1.18rem, 2.3vw, 1.55rem); margin:0 0 0.5rem; font-weight:700;">
-        @Question.Prompt
-    </h2>
+    <h2 class="aq-question-title">@Question.Prompt</h2>
 
     @if (!string.IsNullOrWhiteSpace(Question.CodeSnippet))
     {
@@ -48,7 +46,7 @@
                 ? Reveal.OptionVoteCounts[optionIndex]
                 : 0;
             int totalVotes = Reveal is not null ? Math.Max(1, Reveal.OptionVoteCounts.Sum()) : 1;
-            double votePct = Reveal is not null ? Math.Round(votes * 100.0 / totalVotes, 0) : 0;
+            int votePct = Reveal is not null ? (int)Math.Round(votes * 100.0 / totalVotes) : 0;
 
             <button type="button"
                     class="aq-option-btn @stateClass"
@@ -72,17 +70,17 @@
                     }
                 </span>
 
-                <span style="flex:1; min-width:0;">
-                    <span style="display:block;">@optionText</span>
+                <span class="aq-flex-1">
+                    <span class="aq-block">@optionText</span>
                     @if (Reveal is not null)
                     {
-                        <span style="display:flex; justify-content:space-between; font-size:0.78rem; margin-top:0.25rem; opacity:0.85;" class="tabular">
+                        <span class="aq-vote-meta tabular">
                             <span>@votes @(votes == 1 ? "vote" : "votes")</span>
                             <span>@votePct%</span>
                         </span>
-                        <span class="aq-vote-bar-track" style="display:block;">
-                            <span class="aq-vote-bar-fill" style="display:block; width:@($"{votePct}%");"></span>
-                        </span>
+                        <svg class="aq-vote-bar-track" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true">
+                            <rect x="0" y="0" width="@votePct" height="4" fill="currentColor" />
+                        </svg>
                     }
                 </span>
             </button>
@@ -91,13 +89,9 @@
 
     @if (Reveal is not null && !string.IsNullOrWhiteSpace(Reveal.Explanation))
     {
-        <div class="aq-card-elevated" style="margin-top:1rem;">
-            <div style="font-size:0.78rem; font-weight:700; text-transform:uppercase; color:var(--text-secondary); letter-spacing:0.04em;">
-                Technical Explanation
-            </div>
-            <p style="margin:0.35rem 0 0; color:var(--text-primary); font-size:0.94rem;">
-                @Reveal.Explanation
-            </p>
+        <div class="aq-card-elevated aq-mt-md">
+            <div class="aq-label">Explanation</div>
+            <p class="aq-mt-sm aq-mb-sm">@Reveal.Explanation</p>
         </div>
     }
 </section>
@@ -138,4 +132,3 @@
         _ => mode.ToString()
     };
 }
-

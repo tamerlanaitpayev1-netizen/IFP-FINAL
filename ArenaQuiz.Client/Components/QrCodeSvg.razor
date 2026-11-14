@@ -1,0 +1,37 @@
+@using ArenaQuiz.Client.Services
+
+<div class="aq-qr-box" aria-label="QR Code to join @Payload">
+    <svg width="@PixelSize" height="@PixelSize" viewBox="0 0 37 37" shape-rendering="crispEdges" role="img">
+        <rect x="0" y="0" width="37" height="37" fill="#FFFFFF" />
+        @for (int r = 0; r < 33; r++)
+        {
+            @for (int c = 0; c < 33; c++)
+            {
+                if (_matrix[r, c])
+                {
+                    <rect x="@(c + 2)" y="@(r + 2)" width="1" height="1" fill="#111315" />
+                }
+            }
+        }
+    </svg>
+    <span class="aq-text-xs font-mono-code">@Caption</span>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Payload { get; set; } = string.Empty;
+
+    [Parameter]
+    public int PixelSize { get; set; } = 156;
+
+    [Parameter]
+    public string Caption { get; set; } = "Scan to join";
+
+    private bool[,] _matrix = new bool[33, 33];
+
+    protected override void OnParametersSet()
+    {
+        _matrix = QrCodeEncoder.Encode(string.IsNullOrWhiteSpace(Payload) ? "ArenaQuiz" : Payload);
+    }
+}
+

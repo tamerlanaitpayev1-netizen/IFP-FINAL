@@ -1,291 +1,595 @@
 @page "/host"
+@using System.Text.Json
 @inject QuizApiClient Api
 @inject GameStateContainer GameState
+@inject LocalizationService Loc
+@inject NavigationManager Nav
+@inject IJSRuntime JS
 @implements IDisposable
 
-<PageTitle>Host Studio — ArenaQuiz</PageTitle>
+<PageTitle>@Loc.T("host.title") — ArenaQuiz</PageTitle>
 
-<div class="aq-enter" style="display:flex; flex-direction:column; gap:1.25rem;">
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+<section class="aq-stack-lg">
+    <div class="aq-row-between">
         <div>
-            <h1 style="margin:0; font-size:1.65rem; font-weight:700;">Host Studio</h1>
-            <div style="font-size:0.9rem; color:var(--text-secondary);">
-                Active Role: <strong>@GameState.CurrentUser.Role</strong> (@GameState.CurrentUser.FullName)
-            </div>
+            <h1 class="aq-heading-lg">@Loc.T("host.title")</h1>
+            <p class="aq-text-muted">Launch synchronized arenas, display projector PIN &amp; QR, and author multi-question quizzes.</p>
         </div>
 
-        <div style="display:flex; gap:0.5rem;">
-            <button type="button"
-                    class="aq-btn @(_activeTab == "live" ? "aq-btn-dark" : "aq-btn-secondary")"
-                    @onclick='() => _activeTab = "live"'>
-                Live Game Console
-            </button>
-            <button type="button"
-                    class="aq-btn @(_activeTab == "builder" ? "aq-btn-dark" : "aq-btn-secondary")"
-                    @onclick='() => _activeTab = "builder"'>
-                Quiz Builder
-            </button>
-        </div>
+        @if (IsAuthorizedHost)
+        {
+            <div class="aq-row-wrap">
+                <button type="button"
+                        class="aq-btn aq-btn-sm @(_activeTab == StudioTab.Live ? "aq-btn-dark" : "aq-btn-secondary")"
+                        @onclick="() => _activeTab = StudioTab.Live">
+                    @Loc.T("host.tab.live")
+                </button>
+                <button type="button"
+                        class="aq-btn aq-btn-sm @(_activeTab == StudioTab.Editor ? "aq-btn-dark" : "aq-btn-secondary")"
+                        @onclick="() => _activeTab = StudioTab.Editor">
+                    @Loc.T("host.tab.editor")
+                </button>
+            </div>
+        }
     </div>
 
-    @if (GameState.CurrentUser.Role == UserRole.Player)
+    @if (!IsAuthorizedHost)
     {
-        <div class="aq-card" style="border-color:var(--amber-border); background-color:var(--amber-bg); color:var(--amber-text); display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
-            <div>
-                <strong>RBAC Notice:</strong> You are currently signed in as a <strong>Player</strong>. Switch to a Host account to launch rooms or author quizzes.
+        <div class="aq-card aq-card-narrow aq-stack-md aq-enter">
+            <div class="aq-alert aq-alert-amber">
+                @Loc.T("host.signin_notice")
             </div>
-            <a href="auth" class="aq-btn aq-btn-dark aq-btn-sm">Switch to Host</a>
+            <div class="aq-row-between">
+                <span class="aq-text-muted">Current role: <strong>@GameState.CurrentUser.Role</strong> (@GameState.CurrentUser.FullName)</span>
+                <a href="/auth" class="aq-btn aq-btn-primary">@Loc.T("host.signin_btn")</a>
+            </div>
         </div>
     }
-    else if (_activeTab == "live")
+    else if (_activeTab == StudioTab.Live)
     {
-        @if (GameState.CurrentRoom is null || !GameState.IsHostOfCurrentRoom)
+        @if (!string.IsNullOrWhiteSpace(GameState.LastError))
         {
-            <section class="aq-card">
-                <h2 style="margin:0 0 0.85rem; font-size:1.2rem; font-weight:700;">Configure &amp; Launch Room</h2>
-                <div class="aq-grid-2">
+            <div class="aq-alert aq-alert-crimson aq-row-between" role="alert">
+                <span>@GameState.LastError</span>
+                <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="GameState.ClearError">Dismiss</button>
+            </div>
+        }
+
+        @if (!GameState.IsHostOfCurrentRoom || GameState.CurrentRoom is null)
+        {
+            <div class="aq-grid-2 aq-enter">
+                <div class="aq-card aq-stack-md">
+                    <h2 class="aq-heading-md">Configure Live Room</h2>
+
                     <div>
-                        <label class="aq-label" for="host-quiz">Select Quiz</label>
-                        <select id="host-quiz" class="aq-select" @bind="_selectedQuizId">
-                            @foreach (var q in _quizzes)
+                        <label class="aq-label" for="host-quiz-select">Quiz Deck</label>
+                        <select id="host-quiz-select" class="aq-select" @bind="_selectedQuizId">
+                            @foreach (var quiz in _quizzes)
                             {
-                                <option value="@q.Id">@q.Title (@q.QuestionCount Qs)</option>
+                                <option value="@quiz.Id">@quiz.Title (@quiz.QuestionCount Qs · @quiz.Category)</option>
                             }
                         </select>
                     </div>
 
                     <div>
-                        <label class="aq-label" for="host-mode">Game Mode</label>
-                        <select id="host-mode" class="aq-select" @bind="_selectedMode">
-                            <option value="@GameMode.ClassicSpeed">Classic Speed (Streak + Speed Bonus)</option>
-                            <option value="@GameMode.TeamBattle">Team Battle (Alpha / Beta / Gamma)</option>
-                            <option value="@GameMode.KnockoutElimination">Knockout Elimination (Sudden Death)</option>
+                        <label class="aq-label" for="host-mode-select">Game Mode</label>
+                        <select id="host-mode-select" class="aq-select" @bind="_selectedMode">
+                            <option value="@GameMode.ClassicSpeed">Classic Speed (Streak &amp; Speed Bonus)</option>
+                            <option value="@GameMode.TeamBattle">Team Battle (Cobalt vs Crimson vs Emerald)</option>
+                            <option value="@GameMode.KnockoutElimination">Knockout Elimination (Wrong Answer Eliminates)</option>
                         </select>
                     </div>
-                </div>
 
-                <div style="margin-top:1rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
-                    <label style="display:inline-flex; align-items:center; gap:0.5rem; font-weight:600; cursor:pointer;">
-                        <input type="checkbox" @bind="_autoAdvance" />
-                        <span>Auto-advance 5s after each answer reveal</span>
-                    </label>
+                    <div class="aq-row-wrap">
+                        <input id="host-autoadvance" type="checkbox" @bind="_autoAdvance" />
+                        <label for="host-autoadvance">Auto-advance countdown &amp; reveal when timer reaches 0</label>
+                    </div>
 
                     <button type="button"
                             class="aq-btn aq-btn-primary"
-                            disabled="@(GameState.IsBusy || _selectedQuizId == Guid.Empty)"
+                            disabled="@(_quizzes.Count == 0 || GameState.IsBusy)"
                             @onclick="LaunchRoomAsync">
-                        @(GameState.IsBusy ? "Creating Room..." : "Create Live Room")
+                        @(GameState.IsBusy ? "Creating Room..." : "Create Live Room PIN")
                     </button>
                 </div>
-            </section>
+
+                <div class="aq-card aq-card-elevated aq-stack-sm">
+                    <h2 class="aq-heading-md">Session Integrity Guarantees</h2>
+                    <p class="aq-text-muted">Every live room enforces server-side timing, RBAC host binding, and answer isolation:</p>
+                    <ul class="aq-stack-xs">
+                        <li>Clients never receive correct answer indices prior to reveal.</li>
+                        <li>Host refresh automatically reclaims room control using the signed host recovery token.</li>
+                        <li>Wall-clock synchronized countdown prevents timer drift across pauses.</li>
+                    </ul>
+                </div>
+            </div>
         }
         else
         {
             var room = GameState.CurrentRoom;
+            string joinUrl = BuildJoinUrl(room.RoomCode);
+
+            @if (_projectorMode)
+            {
+                <div class="aq-projector-overlay" role="dialog" aria-label="@Loc.T("host.projector")">
+                    <div class="aq-projector-stage">
+                        <div class="aq-row-between">
+                            <div class="aq-row-wrap">
+                                <span class="aq-badge aq-badge-accent">@Loc.T("host.projector")</span>
+                                <span class="aq-badge aq-badge-neutral">@room.QuizTitle</span>
+                                <span class="aq-badge aq-badge-cobalt">@FormatMode(room.Mode)</span>
+                            </div>
+                            <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => _projectorMode = false">
+                                Exit Projector
+                            </button>
+                        </div>
+
+                        @if (room.Phase == RoomPhase.Lobby)
+                        {
+                            <div class="aq-card aq-card-split aq-row-between">
+                                <div class="aq-stack-md aq-flex-1">
+                                    <span class="aq-label">Join at <strong>@joinUrl</strong></span>
+                                    <div class="aq-projector-pin-giant tabular">@room.RoomCode</div>
+                                    <div class="aq-row-wrap">
+                                        <span class="aq-badge aq-badge-emerald tabular">@room.Players.Count players joined</span>
+                                        <button type="button"
+                                                class="aq-btn aq-btn-primary"
+                                                disabled="@(room.Players.Count == 0)"
+                                                @onclick="StartGameAsync">
+                                            Start Live Match
+                                        </button>
+                                    </div>
+                                </div>
+                                <QrCodeSvg Payload="@joinUrl" PixelSize="196" Caption="@room.RoomCode" />
+                            </div>
+                            <PlayerRoster Players="@room.Players" IsHost="true" Mode="@room.Mode" OnRemovePlayer="GameState.RemovePlayerAsync" />
+                        }
+                        else if (room.Phase is RoomPhase.QuestionActive or RoomPhase.QuestionReveal && room.ActiveQuestion is not null)
+                        {
+                            <div class="aq-row-between">
+                                <RoundTimer RemainingSeconds="@room.RemainingSeconds"
+                                            TotalSeconds="@room.ActiveQuestion.TimeLimitSeconds"
+                                            IsPaused="@room.IsPaused" />
+
+                                <div class="aq-row-wrap">
+                                    <span class="aq-badge aq-badge-cobalt tabular">
+                                        @room.AnsweredCount / @room.ActivePlayerCount answered
+                                    </span>
+
+                                    @if (room.Phase == RoomPhase.QuestionActive)
+                                    {
+                                        <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="GameState.TogglePauseAsync">
+                                            @Loc.T(room.IsPaused ? "host.resume" : "host.pause")
+                                        </button>
+                                        <button type="button" class="aq-btn aq-btn-dark aq-btn-sm" @onclick="GameState.RevealCurrentQuestionAsync">
+                                            Reveal Now
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="aq-btn aq-btn-primary" @onclick="GameState.NextQuestionAsync">
+                                            @(room.CurrentQuestionIndex + 1 >= room.TotalQuestions ? "Show Final Podium" : "Next Question")
+                                        </button>
+                                    }
+                                </div>
+                            </div>
+
+                            <QuestionCard Question="@room.ActiveQuestion"
+                                          Reveal="@room.LastReveal"
+                                          IsHostView="true" />
+                        }
+                        else if (room.Phase == RoomPhase.PodiumFinished)
+                        {
+                            <div class="aq-card aq-lobby-wait-card aq-stack-md">
+                                <span class="aq-badge aq-badge-emerald">Final Podium</span>
+                                <h2 class="aq-heading-lg">@room.QuizTitle Complete</h2>
+                            </div>
+                            <LiveLeaderboard Players="@room.Players" Teams="@room.Teams" Mode="@room.Mode" />
+                        }
+                    </div>
+                </div>
+            }
 
             <div class="aq-pin-banner">
-                <div>
-                    <div style="font-size:0.78rem; text-transform:uppercase; letter-spacing:0.08em; opacity:0.75;">
-                        Room PIN &middot; @room.QuizTitle &middot; @room.Mode
-                    </div>
+                <div class="aq-stack-xs">
+                    <span class="aq-pin-subtitle">@room.QuizTitle · @FormatMode(room.Mode)</span>
                     <div class="aq-pin-code tabular">@room.RoomCode</div>
+                    <span class="aq-text-xs font-mono-code">@joinUrl</span>
                 </div>
 
-                <div style="display:flex; align-items:center; gap:0.65rem; flex-wrap:wrap;">
-                    @if (room.Phase == RoomPhase.Lobby)
-                    {
-                        <button type="button"
-                                class="aq-btn aq-btn-primary"
-                                disabled="@(room.Players.Count == 0)"
-                                @onclick="() => GameState.StartGameAsync()">
-                            Start Game (@room.Players.Count players)
-                        </button>
-                    }
-                    else if (room.Phase == RoomPhase.QuestionActive)
-                    {
-                        <RoundTimer RemainingSeconds="room.RemainingSeconds"
-                                    TotalSeconds="@(room.ActiveQuestion?.TimeLimitSeconds ?? 20)" />
-                        <button type="button"
-                                class="aq-btn aq-btn-primary"
-                                @onclick="() => GameState.RevealCurrentQuestionAsync()">
-                            Reveal Answer Now
-                        </button>
-                    }
-                    else if (room.Phase == RoomPhase.QuestionReveal)
-                    {
-                        <button type="button"
-                                class="aq-btn aq-btn-primary"
-                                @onclick="() => GameState.NextQuestionAsync()">
-                            @(room.CurrentQuestionIndex + 1 >= room.TotalQuestions ? "Show Final Podium" : "Next Question")
-                        </button>
-                    }
-
-                    <button type="button" class="aq-btn aq-btn-secondary" @onclick="() => GameState.LeaveRoomAsync()">
+                <div class="aq-row-wrap">
+                    <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => CopyTextAsync(joinUrl)">
+                        @(_copiedNotice ? "Copied Link" : "Copy Join Link")
+                    </button>
+                    <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => _projectorMode = true">
+                        @Loc.T("host.projector")
+                    </button>
+                    <button type="button" class="aq-btn aq-btn-dark aq-btn-sm" @onclick="CloseRoomConsoleAsync">
                         Close Console
                     </button>
                 </div>
             </div>
 
+            @if (room.IsPaused)
+            {
+                <div class="aq-alert aq-alert-amber" role="status">
+                    Round timer is paused. Press <strong>@Loc.T("host.resume")</strong> when ready to continue.
+                </div>
+            }
+
             @if (room.Phase == RoomPhase.Lobby)
             {
-                <PlayerRoster Players="room.Players"
-                              IsHost="true"
-                              Mode="room.Mode"
-                              OnRemovePlayer="pid => GameState.RemovePlayerAsync(pid)" />
+                <div class="aq-grid-2">
+                    <div class="aq-card aq-stack-md">
+                        <div class="aq-row-between">
+                            <div class="aq-stack-xs">
+                                <h2 class="aq-heading-md">Room Ready for Players</h2>
+                                <p class="aq-text-muted">Players can scan the QR code or enter PIN <strong>@room.RoomCode</strong> on mobile or desktop.</p>
+                            </div>
+                            <QrCodeSvg Payload="@joinUrl" PixelSize="156" Caption="@room.RoomCode" />
+                        </div>
+
+                        <div class="aq-row-between">
+                            <span class="aq-badge aq-badge-neutral tabular">
+                                @room.TotalQuestions questions · @(room.AutoAdvance ? "Auto-advance ON" : "Manual control")
+                            </span>
+                            <button type="button"
+                                    class="aq-btn aq-btn-primary"
+                                    disabled="@(room.Players.Count == 0)"
+                                    @onclick="StartGameAsync">
+                                Start Game (@room.Players.Count joined)
+                            </button>
+                        </div>
+                    </div>
+
+                    <PlayerRoster Players="@room.Players"
+                                  IsHost="true"
+                                  Mode="@room.Mode"
+                                  OnRemovePlayer="GameState.RemovePlayerAsync" />
+                </div>
             }
             else if (room.Phase is RoomPhase.QuestionActive or RoomPhase.QuestionReveal && room.ActiveQuestion is not null)
             {
-                <div class="aq-grid-2" style="grid-template-columns:minmax(0, 1.4fr) minmax(0, 1fr); align-items:start;">
-                    <QuestionCard Question="room.ActiveQuestion"
-                                  Reveal="room.LastReveal"
-                                  IsHostView="true" />
-                    <LiveLeaderboard Players="room.Players"
-                                     Teams="room.Teams"
-                                     Mode="room.Mode" />
+                <div class="aq-grid-host-live">
+                    <div class="aq-stack-md">
+                        <div class="aq-card aq-row-between">
+                            <RoundTimer RemainingSeconds="@room.RemainingSeconds"
+                                        TotalSeconds="@room.ActiveQuestion.TimeLimitSeconds"
+                                        IsPaused="@room.IsPaused" />
+
+                            <div class="aq-row-wrap">
+                                <span class="aq-badge aq-badge-cobalt tabular">
+                                    @room.AnsweredCount / @room.ActivePlayerCount answered
+                                </span>
+
+                                @if (room.Phase == RoomPhase.QuestionActive)
+                                {
+                                    <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="GameState.TogglePauseAsync">
+                                        @Loc.T(room.IsPaused ? "host.resume" : "host.pause")
+                                    </button>
+                                    <button type="button" class="aq-btn aq-btn-dark aq-btn-sm" @onclick="GameState.RevealCurrentQuestionAsync">
+                                        Reveal Answer Now
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="aq-btn aq-btn-primary" @onclick="GameState.NextQuestionAsync">
+                                        @(room.CurrentQuestionIndex + 1 >= room.TotalQuestions ? "Finish & Show Podium" : "Next Question")
+                                    </button>
+                                }
+                            </div>
+                        </div>
+
+                        <QuestionCard Question="@room.ActiveQuestion"
+                                      Reveal="@room.LastReveal"
+                                      IsHostView="true" />
+                    </div>
+
+                    <LiveLeaderboard Players="@room.Players" Teams="@room.Teams" Mode="@room.Mode" />
                 </div>
             }
             else if (room.Phase == RoomPhase.PodiumFinished)
             {
-                <section class="aq-card">
-                    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
-                        <div>
-                            <span class="aq-badge aq-badge-emerald">Saved to SQLite History</span>
-                            <h2 style="margin:0.35rem 0 0; font-size:1.45rem; font-weight:700;">Final Podium — @room.QuizTitle</h2>
-                        </div>
-                        @if (GameState.LastSessionSummary is not null)
-                        {
-                            <a href="@($"api/sessions/{GameState.LastSessionSummary.SessionId}/export.csv")"
-                               target="_blank"
-                               class="aq-btn aq-btn-dark">
-                                Export CSV
-                            </a>
-                        }
+                <div class="aq-card aq-lobby-wait-card aq-stack-md">
+                    <span class="aq-badge aq-badge-emerald">Session Archived</span>
+                    <h2 class="aq-heading-lg">Final Podium — @room.QuizTitle</h2>
+                    @if (room.Players.Count > 0)
+                    {
+                        var champion = room.Players[0];
+                        <p class="aq-text-muted">Winner: <strong>@champion.Nickname</strong> with <strong>@champion.TotalScore pts</strong></p>
+                    }
+                    <div class="aq-row-center aq-row-wrap">
+                        <a href="/analytics" class="aq-btn aq-btn-secondary">View Results &amp; Export CSV</a>
+                        <button type="button" class="aq-btn aq-btn-primary" @onclick="CloseRoomConsoleAsync">Host Another Match</button>
                     </div>
-                    <LiveLeaderboard Players="room.Players"
-                                     Teams="room.Teams"
-                                     Mode="room.Mode" />
-                </section>
+                </div>
+
+                <LiveLeaderboard Players="@room.Players" Teams="@room.Teams" Mode="@room.Mode" />
             }
         }
     }
     else
     {
-        <section class="aq-card">
-            <h2 style="margin:0 0 0.85rem; font-size:1.2rem; font-weight:700;">Create New Quiz</h2>
-
-            <div class="aq-grid-2">
-                <div>
-                    <label class="aq-label" for="qb-title">Quiz Title</label>
-                    <input id="qb-title" class="aq-input" placeholder="e.g. Distributed Systems Midterm" @bind="_newTitle" />
+        <div class="aq-stack-lg aq-enter">
+            @if (!string.IsNullOrWhiteSpace(_editorMessage))
+            {
+                <div class="aq-alert @(_editorMessageError ? "aq-alert-crimson" : "aq-alert-emerald") aq-row-between" role="status">
+                    <span>@_editorMessage</span>
+                    <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => _editorMessage = null">Dismiss</button>
                 </div>
-                <div>
-                    <label class="aq-label" for="qb-cat">Category</label>
-                    <input id="qb-cat" class="aq-input" placeholder="e.g. Architecture" @bind="_newCategory" />
+            }
+
+            <div class="aq-card aq-stack-md">
+                <div class="aq-row-between">
+                    <div>
+                        <h2 class="aq-heading-md">Saved Quiz Decks</h2>
+                        <p class="aq-text-xs">Load any quiz to edit, duplicate, reorder, or remove it.</p>
+                    </div>
+                    <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="ResetEditorToNew">
+                        + New Blank Quiz
+                    </button>
                 </div>
-            </div>
 
-            <div style="margin-top:0.85rem;">
-                <label class="aq-label" for="qb-desc">Description</label>
-                <input id="qb-desc" class="aq-input" placeholder="Short overview for students" @bind="_newDescription" />
-            </div>
-
-            <div style="display:flex; flex-direction:column; gap:1rem; margin-top:1.25rem;">
-                @for (int qIdx = 0; qIdx < _draftQuestions.Count; qIdx++)
+                @if (_quizzes.Count == 0)
                 {
-                    int idx = qIdx;
-                    var draft = _draftQuestions[idx];
-                    <div class="aq-card-elevated">
-                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.65rem;">
-                            <strong>Question #@(idx + 1)</strong>
-                            @if (_draftQuestions.Count > 1)
-                            {
-                                <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => _draftQuestions.RemoveAt(idx)">
-                                    Remove
-                                </button>
-                            }
-                        </div>
-
-                        <div style="display:flex; flex-direction:column; gap:0.65rem;">
-                            <input class="aq-input" placeholder="Question prompt" @bind="draft.Prompt" />
-                            <input class="aq-input" style="font-family:var(--font-mono); font-size:0.85rem;" placeholder="Optional code snippet" @bind="draft.CodeSnippet" />
-
-                            <div class="aq-grid-2" style="gap:0.55rem;">
-                                @for (int optIdx = 0; optIdx < 4; optIdx++)
-                                {
-                                    int oIdx = optIdx;
-                                    <div style="display:flex; align-items:center; gap:0.45rem;">
-                                        <input type="radio"
-                                               name="@($"correct-{idx}")"
-                                               checked="@(draft.CorrectOptionIndex == oIdx)"
-                                               @onchange="() => draft.CorrectOptionIndex = oIdx" />
-                                        <input class="aq-input" placeholder="@($"Option {oIdx + 1}")" @bind="draft.Options[oIdx]" />
+                    <p class="aq-text-muted">No quizzes stored yet. Create one below or generate starter questions.</p>
+                }
+                else
+                {
+                    <div class="aq-stack-xs">
+                        @foreach (var quiz in _quizzes)
+                        {
+                            <div class="aq-leaderboard-row">
+                                <div class="aq-stack-xs aq-flex-1">
+                                    <div class="aq-row-wrap">
+                                        <strong>@quiz.Title</strong>
+                                        <span class="aq-badge aq-badge-neutral">@quiz.Category</span>
+                                        <span class="aq-badge aq-badge-cobalt tabular">@quiz.QuestionCount Qs</span>
                                     </div>
-                                }
-                            </div>
+                                    <span class="aq-text-xs">Author: @quiz.CreatedBy · @quiz.Description</span>
+                                </div>
 
-                            <div class="aq-grid-3" style="gap:0.65rem;">
-                                <div>
-                                    <label class="aq-label">Time (sec)</label>
-                                    <input type="number" min="5" max="120" class="aq-input" @bind="draft.TimeLimitSeconds" />
-                                </div>
-                                <div>
-                                    <label class="aq-label">Base Points</label>
-                                    <input type="number" min="100" max="5000" step="100" class="aq-input" @bind="draft.BasePoints" />
-                                </div>
-                                <div>
-                                    <label class="aq-label">Explanation</label>
-                                    <input class="aq-input" placeholder="Shown on reveal" @bind="draft.Explanation" />
+                                <div class="aq-row-wrap">
+                                    <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => LoadQuizForEditAsync(quiz.Id)">
+                                        Edit
+                                    </button>
+
+                                    @if (_confirmDeleteId == quiz.Id)
+                                    {
+                                        <button type="button" class="aq-btn aq-btn-primary aq-btn-sm" @onclick="() => ConfirmDeleteQuizAsync(quiz.Id)">
+                                            Confirm Delete
+                                        </button>
+                                        <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => _confirmDeleteId = null">
+                                            Cancel
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => _confirmDeleteId = quiz.Id">
+                                            Delete
+                                        </button>
+                                    }
                                 </div>
                             </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="aq-card aq-card-elevated aq-stack-md">
+                <div class="aq-row-between">
+                    <h2 class="aq-heading-md">Smart Topic Template &amp; JSON Tools</h2>
+                    <div class="aq-row-wrap">
+                        <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="ExportCurrentJsonAsync">
+                            Export JSON
+                        </button>
+                        <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => _showJsonImport = !_showJsonImport">
+                            @(_showJsonImport ? "Hide JSON Panel" : "Import / View JSON")
+                        </button>
+                    </div>
+                </div>
+
+                <div class="aq-row-wrap">
+                    <div class="aq-flex-1">
+                        <label class="aq-label" for="template-topic">Topic for 1-Click Starter Questions</label>
+                        <input id="template-topic" class="aq-input" @bind="_templateTopic" placeholder="e.g., Distributed Systems, C# LINQ, Cybersecurity" />
+                    </div>
+                    <button type="button" class="aq-btn aq-btn-dark aq-btn-sm" @onclick="AppendTopicTemplateQuestions">
+                        Generate 3 Starter Questions
+                    </button>
+                </div>
+
+                @if (_showJsonImport)
+                {
+                    <div class="aq-stack-sm">
+                        <label class="aq-label" for="json-payload">Quiz JSON Payload (Import or Copy Export)</label>
+                        <textarea id="json-payload" class="aq-textarea font-mono-code" @bind="_jsonText" placeholder="Paste CreateQuizRequest JSON here..."></textarea>
+                        <div class="aq-row-wrap">
+                            <button type="button" class="aq-btn aq-btn-primary aq-btn-sm" @onclick="ImportFromJson">Apply Imported JSON</button>
+                            <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => CopyTextAsync(_jsonText)">Copy JSON</button>
                         </div>
                     </div>
                 }
             </div>
 
-            @if (!string.IsNullOrWhiteSpace(_builderFeedback))
-            {
-                <div class="aq-badge @(_builderSuccess ? "aq-badge-emerald" : "aq-badge-crimson")" style="margin-top:0.85rem; padding:0.55rem 0.85rem; border-radius:var(--radius-sm);">
-                    @_builderFeedback
+            <div class="aq-card aq-stack-md">
+                <div class="aq-row-between">
+                    <h2 class="aq-heading-md">
+                        @(_editingQuizId.HasValue ? $"Editing Quiz: {_editTitle}" : "Create New Quiz")
+                    </h2>
+                    @if (_editingQuizId.HasValue)
+                    {
+                        <span class="aq-badge aq-badge-amber">Editing Existing Deck</span>
+                    }
+                    else
+                    {
+                        <span class="aq-badge aq-badge-emerald">New Draft</span>
+                    }
                 </div>
-            }
 
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; flex-wrap:wrap; margin-top:1rem;">
-                <button type="button" class="aq-btn aq-btn-secondary" @onclick="AddDraftQuestion">
-                    + Add Question
-                </button>
-                <button type="button" class="aq-btn aq-btn-primary" disabled="@_isSavingQuiz" @onclick="SaveQuizAsync">
-                    @(_isSavingQuiz ? "Saving..." : "Save Quiz to SQLite")
-                </button>
+                <div class="aq-grid-2">
+                    <div>
+                        <label class="aq-label" for="quiz-title">Quiz Title</label>
+                        <input id="quiz-title" class="aq-input" @bind="_editTitle" placeholder="e.g., C# Concurrency &amp; Async Patterns" />
+                    </div>
+                    <div>
+                        <label class="aq-label" for="quiz-category">Category</label>
+                        <input id="quiz-category" class="aq-input" @bind="_editCategory" placeholder="e.g., Software Engineering" />
+                    </div>
+                </div>
+
+                <div>
+                    <label class="aq-label" for="quiz-desc">Description</label>
+                    <input id="quiz-desc" class="aq-input" @bind="_editDescription" placeholder="Short summary shown to hosts and players" />
+                </div>
+
+                <div class="aq-stack-md">
+                    @for (int qi = 0; qi < _editQuestions.Count; qi++)
+                    {
+                        int qIdx = qi;
+                        var q = _editQuestions[qIdx];
+
+                        <div class="aq-card aq-card-elevated aq-stack-sm">
+                            <div class="aq-row-between">
+                                <strong>Question #@(qIdx + 1)</strong>
+                                <div class="aq-row-wrap">
+                                    <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm"
+                                            disabled="@(qIdx == 0)"
+                                            @onclick="() => MoveQuestion(qIdx, -1)">
+                                        Up
+                                    </button>
+                                    <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm"
+                                            disabled="@(qIdx == _editQuestions.Count - 1)"
+                                            @onclick="() => MoveQuestion(qIdx, 1)">
+                                        Down
+                                    </button>
+                                    <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm"
+                                            @onclick="() => DuplicateQuestion(qIdx)">
+                                        Duplicate
+                                    </button>
+                                    <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm"
+                                            disabled="@(_editQuestions.Count <= 1)"
+                                            @onclick="() => RemoveQuestion(qIdx)">
+                                        Remove
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="aq-label" for="q-prompt-@qIdx">Question Prompt</label>
+                                <input id="q-prompt-@qIdx" class="aq-input" @bind="q.Prompt" placeholder="Enter question prompt..." />
+                            </div>
+
+                            <div>
+                                <label class="aq-label" for="q-code-@qIdx">Optional Code Snippet</label>
+                                <textarea id="q-code-@qIdx" class="aq-textarea font-mono-code" @bind="q.CodeSnippet" placeholder="Optional code snippet displayed cleanly above options..."></textarea>
+                            </div>
+
+                            <div class="aq-grid-2">
+                                @for (int oi = 0; oi < 4; oi++)
+                                {
+                                    int optIdx = oi;
+                                    string letter = ((char)('A' + optIdx)).ToString();
+                                    <div>
+                                        <label class="aq-label" for="q-@qIdx-opt-@optIdx">Option @letter</label>
+                                        <input id="q-@qIdx-opt-@optIdx" class="aq-input" @bind="q.Options[optIdx]" placeholder="Answer option @letter" />
+                                    </div>
+                                }
+                            </div>
+
+                            <div class="aq-grid-3">
+                                <div>
+                                    <label class="aq-label" for="q-correct-@qIdx">Correct Answer</label>
+                                    <select id="q-correct-@qIdx" class="aq-select" @bind="q.CorrectOptionIndex">
+                                        <option value="0">Option A</option>
+                                        <option value="1">Option B</option>
+                                        <option value="2">Option C</option>
+                                        <option value="3">Option D</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="aq-label" for="q-time-@qIdx">Time Limit (sec)</label>
+                                    <input id="q-time-@qIdx" type="number" min="5" max="180" class="aq-input" @bind="q.TimeLimitSeconds" />
+                                </div>
+                                <div>
+                                    <label class="aq-label" for="q-pts-@qIdx">Base Points</label>
+                                    <input id="q-pts-@qIdx" type="number" min="100" max="5000" step="100" class="aq-input" @bind="q.BasePoints" />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="aq-label" for="q-exp-@qIdx">Explanation (Shown on Reveal)</label>
+                                <input id="q-exp-@qIdx" class="aq-input" @bind="q.Explanation" placeholder="Why is this option correct?" />
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <div class="aq-row-between">
+                    <button type="button" class="aq-btn aq-btn-secondary" @onclick="AddBlankQuestion">
+                        + Add Question
+                    </button>
+                    <button type="button" class="aq-btn aq-btn-primary" disabled="@_savingQuiz" @onclick="SaveQuizAsync">
+                        @(_savingQuiz ? "Saving..." : _editingQuizId.HasValue ? "Update Quiz" : "Save New Quiz")
+                    </button>
+                </div>
             </div>
-        </section>
+        </div>
     }
-</div>
+</section>
 
 @code {
-    private string _activeTab = "live";
+    private enum StudioTab { Live, Editor }
+
+    private StudioTab _activeTab = StudioTab.Live;
     private IReadOnlyList<QuizSummaryDto> _quizzes = [];
     private Guid _selectedQuizId;
     private GameMode _selectedMode = GameMode.ClassicSpeed;
     private bool _autoAdvance = true;
+    private bool _projectorMode;
+    private bool _copiedNotice;
 
-    private string _newTitle = string.Empty;
-    private string _newCategory = "Software Engineering";
-    private string _newDescription = string.Empty;
-    private readonly List<DraftQuestion> _draftQuestions = [new DraftQuestion()];
-    private string? _builderFeedback;
-    private bool _builderSuccess;
-    private bool _isSavingQuiz;
+    // Editor state
+    private Guid? _editingQuizId;
+    private Guid? _confirmDeleteId;
+    private string _editTitle = string.Empty;
+    private string _editCategory = "Computer Science";
+    private string _editDescription = string.Empty;
+    private List<EditableQuestionModel> _editQuestions = [EditableQuestionModel.CreateBlank()];
+    private string _templateTopic = "ASP.NET Core & SignalR";
+    private bool _showJsonImport;
+    private string _jsonText = string.Empty;
+    private bool _savingQuiz;
+    private string? _editorMessage;
+    private bool _editorMessageError;
+
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
+    };
+
+    private bool IsAuthorizedHost => GameState.CurrentUser.Role is UserRole.Host or UserRole.Admin;
 
     protected override async Task OnInitializedAsync()
     {
         GameState.OnStateChanged += HandleStateChanged;
-        await LoadQuizzesAsync();
+        Loc.OnLanguageChanged += HandleStateChanged;
+
+        await GameState.TryRestoreAuthSessionAsync();
+
+        if (IsAuthorizedHost && !GameState.IsHostOfCurrentRoom)
+        {
+            await GameState.TryRecoverHostSessionAsync();
+        }
+
+        await RefreshQuizzesAsync();
     }
 
-    private async Task LoadQuizzesAsync()
+    private async Task RefreshQuizzesAsync()
     {
         _quizzes = await Api.GetQuizzesAsync();
-        if (_selectedQuizId == Guid.Empty && _quizzes.Count > 0)
+        if (_quizzes.Count > 0 && (_selectedQuizId == Guid.Empty || !_quizzes.Any(q => q.Id == _selectedQuizId)))
         {
             _selectedQuizId = _quizzes[0].Id;
         }
@@ -297,67 +601,348 @@
         await GameState.CreateRoomAsync(_selectedQuizId, _selectedMode, _autoAdvance);
     }
 
-    private void AddDraftQuestion()
+    private async Task StartGameAsync() => await GameState.StartGameAsync();
+
+    private async Task CloseRoomConsoleAsync()
     {
-        _draftQuestions.Add(new DraftQuestion());
+        _projectorMode = false;
+        await GameState.LeaveRoomAsync();
+    }
+
+    private string BuildJoinUrl(string roomCode) =>
+        $"{Nav.BaseUri.TrimEnd('/')}/play?pin={Uri.EscapeDataString(roomCode)}";
+
+    private async Task CopyTextAsync(string text)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            _copiedNotice = true;
+            StateHasChanged();
+            await Task.Delay(1800);
+            _copiedNotice = false;
+        }
+        catch
+        {
+            _editorMessage = "Clipboard access blocked by browser; copy the text directly from the field.";
+            _editorMessageError = false;
+        }
+    }
+
+    private async Task LoadQuizForEditAsync(Guid quizId)
+    {
+        _editorMessage = null;
+        var res = await Api.GetQuizForEditAsync(quizId);
+        if (!res.IsSuccess || res.Value is null)
+        {
+            _editorMessage = res.Error ?? "Unable to load quiz details.";
+            _editorMessageError = true;
+            return;
+        }
+
+        var detail = res.Value;
+        _editingQuizId = detail.Id;
+        _editTitle = detail.Title;
+        _editCategory = detail.Category;
+        _editDescription = detail.Description;
+        _editQuestions = detail.Questions
+            .OrderBy(q => q.OrderIndex)
+            .Select(q => new EditableQuestionModel
+            {
+                Prompt = q.Prompt,
+                CodeSnippet = q.CodeSnippet ?? string.Empty,
+                Options = EnsureFourOptions(q.Options),
+                CorrectOptionIndex = q.CorrectOptionIndex,
+                TimeLimitSeconds = q.TimeLimitSeconds,
+                BasePoints = q.BasePoints,
+                Explanation = q.Explanation
+            })
+            .ToList();
+
+        if (_editQuestions.Count == 0)
+        {
+            _editQuestions.Add(EditableQuestionModel.CreateBlank());
+        }
+        _editorMessage = $"Loaded \"{detail.Title}\" for editing.";
+        _editorMessageError = false;
+    }
+
+    private void ResetEditorToNew()
+    {
+        _editingQuizId = null;
+        _editTitle = string.Empty;
+        _editCategory = "Computer Science";
+        _editDescription = string.Empty;
+        _editQuestions = [EditableQuestionModel.CreateBlank()];
+        _editorMessage = null;
+    }
+
+    private void AddBlankQuestion() => _editQuestions.Add(EditableQuestionModel.CreateBlank());
+
+    private void DuplicateQuestion(int index)
+    {
+        if (index < 0 || index >= _editQuestions.Count) return;
+        var src = _editQuestions[index];
+        var copy = new EditableQuestionModel
+        {
+            Prompt = $"{src.Prompt} (Copy)",
+            CodeSnippet = src.CodeSnippet,
+            Options = [.. src.Options],
+            CorrectOptionIndex = src.CorrectOptionIndex,
+            TimeLimitSeconds = src.TimeLimitSeconds,
+            BasePoints = src.BasePoints,
+            Explanation = src.Explanation
+        };
+        _editQuestions.Insert(index + 1, copy);
+    }
+
+    private void MoveQuestion(int index, int delta)
+    {
+        int target = index + delta;
+        if (index < 0 || target < 0 || index >= _editQuestions.Count || target >= _editQuestions.Count)
+        {
+            return;
+        }
+        (_editQuestions[index], _editQuestions[target]) = (_editQuestions[target], _editQuestions[index]);
+    }
+
+    private void RemoveQuestion(int index)
+    {
+        if (_editQuestions.Count <= 1 || index < 0 || index >= _editQuestions.Count) return;
+        _editQuestions.RemoveAt(index);
+    }
+
+    private void AppendTopicTemplateQuestions()
+    {
+        string topic = string.IsNullOrWhiteSpace(_templateTopic) ? "Software Engineering" : _templateTopic.Trim();
+        if (string.IsNullOrWhiteSpace(_editTitle))
+        {
+            _editTitle = $"{topic} Mastery Check";
+            _editCategory = topic;
+            _editDescription = $"Interactive live assessment covering core {topic} principles.";
+        }
+
+        // Replace untouched initial empty question if present
+        if (_editQuestions.Count == 1 && string.IsNullOrWhiteSpace(_editQuestions[0].Prompt))
+        {
+            _editQuestions.Clear();
+        }
+
+        _editQuestions.AddRange(
+        [
+            new EditableQuestionModel
+            {
+                Prompt = $"Which server-side guarantee best prevents client tampering in a real-time {topic} system?",
+                Options =
+                [
+                    "Authoritative server timestamps and signed identity checks",
+                    "Storing answers inside hidden browser fields",
+                    "Trusting elapsed time reported by the mobile browser",
+                    "Sending full answer keys at room startup"
+                ],
+                CorrectOptionIndex = 0,
+                TimeLimitSeconds = 25,
+                BasePoints = 1000,
+                Explanation = "Never trust client-supplied timestamps, identities, or preloaded answer keys."
+            },
+            new EditableQuestionModel
+            {
+                Prompt = $"Why does {topic} rely on bounded rate limits and state validation?",
+                Options =
+                [
+                    "To increase memory usage per connection",
+                    "To prevent broadcast floods and unauthorized state transitions",
+                    "To disable WebSocket fallback",
+                    "To allow duplicate answer submissions"
+                ],
+                CorrectOptionIndex = 1,
+                TimeLimitSeconds = 20,
+                BasePoints = 1000,
+                Explanation = "Validating state transitions and throttling high-frequency events keeps multi-user sessions resilient."
+            },
+            new EditableQuestionModel
+            {
+                Prompt = $"What time complexity should incremental progress broadcasts aim for per submitted player answer in {topic}?",
+                Options =
+                [
+                    "O(P^3)",
+                    "O(P^2)",
+                    "O(1) computation / O(P) group delta instead of full-state re-serialization",
+                    "O(2^P)"
+                ],
+                CorrectOptionIndex = 2,
+                TimeLimitSeconds = 20,
+                BasePoints = 1200,
+                Explanation = "Sending lightweight progress deltas avoids resending full participant rosters on every click."
+            }
+        ]);
+
+        _editorMessage = $"Appended 3 starter questions for \"{topic}\". Customize prompts before saving.";
+        _editorMessageError = false;
+    }
+
+    private CreateQuizRequest BuildRequestFromEditor() =>
+        new(
+            _editTitle.Trim(),
+            string.IsNullOrWhiteSpace(_editCategory) ? "General" : _editCategory.Trim(),
+            _editDescription.Trim(),
+            GameState.CurrentUser.FullName,
+            _editQuestions.Select(q => new CreateQuestionRequest(
+                q.Prompt.Trim(),
+                string.IsNullOrWhiteSpace(q.CodeSnippet) ? null : q.CodeSnippet.Trim(),
+                q.Options.Select(o => o.Trim()).ToList(),
+                Math.Clamp(q.CorrectOptionIndex, 0, 3),
+                Math.Clamp(q.TimeLimitSeconds, 5, 180),
+                Math.Clamp(q.BasePoints, 100, 5000),
+                q.Explanation.Trim())).ToList());
+
+    private async Task ExportCurrentJsonAsync()
+    {
+        var req = BuildRequestFromEditor();
+        _jsonText = JsonSerializer.Serialize(req, JsonOpts);
+        _showJsonImport = true;
+        await CopyTextAsync(_jsonText);
+    }
+
+    private void ImportFromJson()
+    {
+        if (string.IsNullOrWhiteSpace(_jsonText))
+        {
+            _editorMessage = "Paste valid quiz JSON before importing.";
+            _editorMessageError = true;
+            return;
+        }
+
+        try
+        {
+            var imported = JsonSerializer.Deserialize<CreateQuizRequest>(_jsonText, JsonOpts);
+            if (imported is null || imported.Questions.Count == 0)
+            {
+                _editorMessage = "JSON must contain a title and at least one question.";
+                _editorMessageError = true;
+                return;
+            }
+
+            _editTitle = imported.Title;
+            _editCategory = imported.Category;
+            _editDescription = imported.Description;
+            _editQuestions = imported.Questions.Select(q => new EditableQuestionModel
+            {
+                Prompt = q.Prompt,
+                CodeSnippet = q.CodeSnippet ?? string.Empty,
+                Options = EnsureFourOptions(q.Options),
+                CorrectOptionIndex = Math.Clamp(q.CorrectOptionIndex, 0, 3),
+                TimeLimitSeconds = q.TimeLimitSeconds > 0 ? q.TimeLimitSeconds : 20,
+                BasePoints = q.BasePoints > 0 ? q.BasePoints : 1000,
+                Explanation = q.Explanation
+            }).ToList();
+
+            _editorMessage = $"Imported {_editQuestions.Count} questions from JSON.";
+            _editorMessageError = false;
+        }
+        catch (Exception ex)
+        {
+            _editorMessage = $"Invalid JSON: {ex.Message}";
+            _editorMessageError = true;
+        }
     }
 
     private async Task SaveQuizAsync()
     {
-        _builderFeedback = null;
-        _isSavingQuiz = true;
-
-        var request = new CreateQuizRequest(
-            _newTitle,
-            _newCategory,
-            _newDescription,
-            GameState.CurrentUser.FullName,
-            _draftQuestions.Select(d => new CreateQuestionRequest(
-                d.Prompt,
-                d.CodeSnippet,
-                [.. d.Options],
-                d.CorrectOptionIndex,
-                d.TimeLimitSeconds,
-                d.BasePoints,
-                d.Explanation)).ToList());
-
-        var result = await Api.CreateQuizAsync(request);
-        _isSavingQuiz = false;
-
-        if (result.IsSuccess && result.Value is not null)
+        _editorMessage = null;
+        if (string.IsNullOrWhiteSpace(_editTitle))
         {
-            _builderSuccess = true;
-            _builderFeedback = $"Saved '{result.Value.Title}' ({result.Value.QuestionCount} questions).";
-            _newTitle = string.Empty;
-            _newDescription = string.Empty;
-            _draftQuestions.Clear();
-            _draftQuestions.Add(new DraftQuestion());
-            await LoadQuizzesAsync();
-            _selectedQuizId = result.Value.Id;
+            _editorMessage = "Please enter a quiz title.";
+            _editorMessageError = true;
+            return;
+        }
+
+        if (_editQuestions.Any(q => string.IsNullOrWhiteSpace(q.Prompt) || q.Options.Any(string.IsNullOrWhiteSpace)))
+        {
+            _editorMessage = "Every question requires a prompt and all 4 non-empty options.";
+            _editorMessageError = true;
+            return;
+        }
+
+        _savingQuiz = true;
+        try
+        {
+            var req = BuildRequestFromEditor();
+            var res = _editingQuizId.HasValue
+                ? await Api.UpdateQuizAsync(_editingQuizId.Value, req)
+                : await Api.CreateQuizAsync(req);
+
+            if (res.IsSuccess && res.Value is not null)
+            {
+                await RefreshQuizzesAsync();
+                _selectedQuizId = res.Value.Id;
+                _editingQuizId = res.Value.Id;
+                _editorMessage = $"Saved \"{res.Value.Title}\" ({res.Value.QuestionCount} questions).";
+                _editorMessageError = false;
+            }
+            else
+            {
+                _editorMessage = res.Error ?? "Failed to save quiz.";
+                _editorMessageError = true;
+            }
+        }
+        finally
+        {
+            _savingQuiz = false;
+        }
+    }
+
+    private async Task ConfirmDeleteQuizAsync(Guid id)
+    {
+        bool ok = await Api.DeleteQuizAsync(id);
+        _confirmDeleteId = null;
+        if (ok)
+        {
+            if (_editingQuizId == id) ResetEditorToNew();
+            await RefreshQuizzesAsync();
+            _editorMessage = "Quiz deleted.";
+            _editorMessageError = false;
         }
         else
         {
-            _builderSuccess = false;
-            _builderFeedback = result.Error ?? "Validation failed.";
+            _editorMessage = "Delete failed. Ensure you are signed in as Host.";
+            _editorMessageError = true;
         }
     }
+
+    private static List<string> EnsureFourOptions(IReadOnlyList<string> source)
+    {
+        var list = source.Take(4).ToList();
+        while (list.Count < 4) list.Add(string.Empty);
+        return list;
+    }
+
+    private static string FormatMode(GameMode mode) => mode switch
+    {
+        GameMode.ClassicSpeed => "Classic Speed",
+        GameMode.TeamBattle => "Team Battle",
+        GameMode.KnockoutElimination => "Knockout",
+        _ => mode.ToString()
+    };
 
     private void HandleStateChanged() => InvokeAsync(StateHasChanged);
 
     public void Dispose()
     {
         GameState.OnStateChanged -= HandleStateChanged;
+        Loc.OnLanguageChanged -= HandleStateChanged;
     }
 
-    private sealed class DraftQuestion
+    private sealed class EditableQuestionModel
     {
         public string Prompt { get; set; } = string.Empty;
-        public string? CodeSnippet { get; set; }
+        public string CodeSnippet { get; set; } = string.Empty;
         public List<string> Options { get; set; } = [string.Empty, string.Empty, string.Empty, string.Empty];
         public int CorrectOptionIndex { get; set; }
         public int TimeLimitSeconds { get; set; } = 20;
         public int BasePoints { get; set; } = 1000;
         public string Explanation { get; set; } = string.Empty;
+
+        public static EditableQuestionModel CreateBlank() => new();
     }
 }
-

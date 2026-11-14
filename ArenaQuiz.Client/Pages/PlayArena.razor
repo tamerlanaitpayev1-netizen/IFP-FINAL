@@ -1,32 +1,31 @@
 @page "/play"
 @page "/play/{RoomCode}"
 @inject GameStateContainer GameState
+@inject LocalizationService L
 @implements IDisposable
 
 <PageTitle>Play Arena — ArenaQuiz</PageTitle>
 
-<div class="aq-enter" style="display:flex; flex-direction:column; gap:1.25rem;">
+<div class="aq-enter aq-stack-lg">
     @if (GameState.CurrentRoom is null)
     {
-        <section class="aq-card" style="max-width:520px; margin:0 auto; width:100%;">
-            <h1 style="margin:0 0 0.4rem; font-size:1.5rem; font-weight:700;">Enter Play Arena</h1>
-            <p style="margin:0 0 1rem; color:var(--text-secondary); font-size:0.92rem;">
-                Join with the 6-character PIN displayed by your host.
-            </p>
+        <section class="aq-card aq-card-narrow">
+            <h1 class="aq-heading-lg">@L.T("play.title")</h1>
+            <p class="aq-text-muted aq-mb-md">Join with the 6-character PIN displayed by your host.</p>
 
-            <div style="display:flex; flex-direction:column; gap:0.85rem;">
+            <div class="aq-stack-md">
                 <div>
-                    <label class="aq-label" for="play-pin">Room PIN</label>
+                    <label class="aq-label" for="play-pin">@L.T("home.pin")</label>
                     <input id="play-pin" class="aq-input aq-pin-input" placeholder="AQ4829" maxlength="8" @bind="_pin" />
                 </div>
 
                 <div>
-                    <label class="aq-label" for="play-nick">Your Nickname</label>
+                    <label class="aq-label" for="play-nick">@L.T("home.nick")</label>
                     <input id="play-nick" class="aq-input" placeholder="e.g. Dias_Dev" maxlength="24" @bind="_nickname" />
                 </div>
 
                 <div>
-                    <label class="aq-label" for="play-team">Team Preference</label>
+                    <label class="aq-label" for="play-team">@L.T("home.team")</label>
                     <select id="play-team" class="aq-select" @bind="_team">
                         <option value="@TeamSide.None">Auto-Balance</option>
                         <option value="@TeamSide.Alpha">Team Alpha</option>
@@ -39,7 +38,7 @@
                         class="aq-btn aq-btn-primary"
                         disabled="@GameState.IsBusy"
                         @onclick="JoinAsync">
-                    @(GameState.IsBusy ? "Connecting..." : "Enter Room")
+                    @(GameState.IsBusy ? "Connecting..." : L.T("home.join_btn"))
                 </button>
             </div>
         </section>
@@ -49,24 +48,25 @@
         var room = GameState.CurrentRoom;
         var me = GameState.CurrentPlayerStanding;
 
-        <div class="aq-card" style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; flex-wrap:wrap;">
+        <div class="aq-card aq-row-between">
             <div>
-                <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
-                    <span class="aq-badge aq-badge-neutral tabular" style="font-family:var(--font-mono);">PIN: @room.RoomCode</span>
+                <div class="aq-row-wrap">
+                    <span class="aq-badge aq-badge-neutral font-mono-code tabular">PIN: @room.RoomCode</span>
                     <span class="aq-badge aq-badge-cobalt">@room.Mode</span>
                     @if (me is not null)
                     {
                         <span class="aq-badge aq-badge-emerald tabular">Score: @me.TotalScore &middot; Rank #@me.Rank</span>
                     }
                 </div>
-                <div style="font-weight:700; margin-top:0.35rem;">@room.QuizTitle</div>
+                <strong class="aq-block aq-mt-sm">@room.QuizTitle</strong>
             </div>
 
-            <div style="display:flex; align-items:center; gap:0.65rem;">
+            <div class="aq-row-wrap">
                 @if (room.Phase == RoomPhase.QuestionActive && room.ActiveQuestion is not null)
                 {
                     <RoundTimer RemainingSeconds="room.RemainingSeconds"
-                                TotalSeconds="room.ActiveQuestion.TimeLimitSeconds" />
+                                TotalSeconds="room.ActiveQuestion.TimeLimitSeconds"
+                                IsPaused="room.IsPaused" />
                 }
                 <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => GameState.LeaveRoomAsync()">
                     Leave
@@ -76,23 +76,19 @@
 
         @if (GameState.IsEliminated && room.Phase != RoomPhase.PodiumFinished)
         {
-            <div class="aq-card" style="border-color:var(--crimson-border); background-color:var(--crimson-bg); color:var(--crimson-text);">
-                <strong>Eliminated in Knockout Mode!</strong> You are now in Spectator mode until the podium finishes.
+            <div class="aq-alert aq-alert-crimson">
+                <strong>Eliminated in Knockout Mode.</strong> You are now spectating until the final podium.
             </div>
         }
 
         @if (room.Phase == RoomPhase.Lobby)
         {
-            <section class="aq-card" style="text-align:center; padding:1.75rem 1.25rem;">
-                <span class="aq-badge aq-badge-amber">Waiting for Host to Start</span>
-                <h2 style="margin:0.65rem 0 0.35rem; font-size:1.4rem; font-weight:700;">
-                    You are in, @(GameState.CurrentNickname ?? "Player")!
-                </h2>
-                <p style="margin:0 0 1.15rem; color:var(--text-secondary);">
-                    Keep this tab open on your phone or laptop. Questions will appear automatically.
-                </p>
+            <section class="aq-card aq-lobby-wait-card">
+                <span class="aq-badge aq-badge-amber">@L.T("play.wait")</span>
+                <h2 class="aq-heading-lg aq-mt-sm">You are in, @(GameState.CurrentNickname ?? "Player")!</h2>
+                <p class="aq-text-muted aq-mb-md">Keep this tab open on your phone or laptop. Questions will appear automatically.</p>
 
-                <div style="display:flex; justify-content:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:1.25rem;">
+                <div class="aq-row-center aq-mb-md">
                     @foreach (var tag in _reactionTags)
                     {
                         <button type="button"
@@ -105,7 +101,7 @@
 
                 @if (GameState.RecentReactions.Count > 0)
                 {
-                    <div style="display:flex; justify-content:center; gap:0.4rem; flex-wrap:wrap;">
+                    <div class="aq-row-center">
                         @foreach (var r in GameState.RecentReactions.TakeLast(6))
                         {
                             <span class="aq-badge aq-badge-neutral">@r.SenderNickname: @r.ReactionKey</span>
@@ -121,13 +117,23 @@
             <QuestionCard Question="room.ActiveQuestion"
                           Reveal="room.LastReveal"
                           SelectedOptionIndex="GameState.SelectedOptionIndex"
-                          IsDisabled="GameState.IsEliminated"
+                          IsDisabled="GameState.IsEliminated || room.IsPaused"
                           OnOptionSelected="idx => GameState.SubmitAnswerAsync(idx)" />
+
+            @if (room.IsPaused && room.Phase == RoomPhase.QuestionActive)
+            {
+                <div class="aq-alert aq-alert-amber">
+                    <strong>Timer Paused</strong> — The host temporarily paused this question.
+                </div>
+            }
 
             @if (GameState.HasAnsweredCurrentQuestion && room.Phase == RoomPhase.QuestionActive && GameState.LastAnswerAck is not null)
             {
-                <div class="aq-card" style="border-color:var(--cobalt-border); background-color:var(--cobalt-bg); color:var(--cobalt-text);">
-                    <strong>Answer Locked In</strong> (Server timestamp: @((GameState.LastAnswerAck.ServerElapsedMs / 1000.0).ToString("F2"))s). Waiting for other players...
+                <div class="aq-alert aq-alert-cobalt">
+                    <span>
+                        <strong>@L.T("play.locked")</strong> (@((GameState.LastAnswerAck.ServerElapsedMs / 1000.0).ToString("F2"))s).
+                        Waiting for remaining players (@room.AnsweredCount / @Math.Max(1, room.ActivePlayerCount)).
+                    </span>
                 </div>
             }
 
@@ -143,7 +149,7 @@
         {
             <section class="aq-card">
                 <span class="aq-badge aq-badge-emerald">Game Complete</span>
-                <h2 style="margin:0.45rem 0 0.85rem; font-size:1.5rem; font-weight:700;">Final Standings</h2>
+                <h2 class="aq-heading-lg aq-mt-sm aq-mb-md">Final Standings</h2>
                 <LiveLeaderboard Players="room.Players"
                                  Teams="room.Teams"
                                  Mode="room.Mode"
@@ -165,6 +171,7 @@
     protected override void OnInitialized()
     {
         GameState.OnStateChanged += HandleStateChanged;
+        L.OnLanguageChanged += HandleStateChanged;
         if (!string.IsNullOrWhiteSpace(RoomCode))
         {
             _pin = RoomCode.ToUpperInvariant();
@@ -193,6 +200,6 @@
     public void Dispose()
     {
         GameState.OnStateChanged -= HandleStateChanged;
+        L.OnLanguageChanged -= HandleStateChanged;
     }
 }
-

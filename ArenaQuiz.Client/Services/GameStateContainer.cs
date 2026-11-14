@@ -7,12 +7,13 @@ namespace ArenaQuiz.Client.Services;
 
 /// <summary>
 /// Centralized reactive Blazor state container managing SignalR Hub connection, live room snapshot,
-/// active user RBAC session, and session-storage reconnection tokens.
+/// authenticated user RBAC session, host recovery tokens, and player reconnection persistence.
 /// </summary>
 public sealed class GameStateContainer(
     NavigationManager navigation,
     IJSRuntime js,
-    SoundService sound) : IAsyncDisposable
+    SoundService sound,
+    QuizApiClient api) : IAsyncDisposable
 {
     private HubConnection? _hub;
     private readonly SemaphoreSlim _connectLock = new(1, 1);
@@ -24,6 +25,7 @@ public sealed class GameStateContainer(
     public string? CurrentPlayerId { get; private set; }
     public string? CurrentNickname { get; private set; }
     public string? ReconnectToken { get; private set; }
+    public string? HostControlToken { get; private set; }
     public bool IsHostOfCurrentRoom { get; private set; }
 
     public int? SelectedOptionIndex { get; private set; }
@@ -34,8 +36,9 @@ public sealed class GameStateContainer(
 
     public List<ReactionEventDto> RecentReactions { get; } = [];
 
+    // Default to unauthenticated Guest Player (RBAC never grants Host by default).
     public UserSessionDto CurrentUser { get; private set; } =
-        new("tamerlan", "Тамерлан (Host)", UserRole.Host, "default-host-session");
+        new("guest", "Guest Player", UserRole.Player, string.Empty);
 
     public HubConnectionState ConnectionState =>
         _hub?.State ?? HubConnectionState.Disconnected;
@@ -49,10 +52,36 @@ public sealed class GameStateContainer(
             ? null
             : CurrentRoom?.Players.FirstOrDefault(p => p.PlayerId == CurrentPlayerId);
 
-    public void SetUserSession(UserSessionDto session)
+    public async Task SetUserSessionAsync(UserSessionDto session)
     {
         CurrentUser = session;
+        api.SetBearerToken(session.Token);
+        await PersistAuthSessionAsync(session);
         NotifyStateChanged();
+    }
+
+    public async Task TryRestoreAuthSessionAsync()
+    {
+        try
+        {
+            string? token = await js.InvokeAsync<string?>("arenaStorage.get", "aq_auth_token");
+            string? username = await js.InvokeAsync<string?>("arenaStorage.get", "aq_auth_user");
+            string? fullName = await js.InvokeAsync<string?>("arenaStorage.get", "aq_auth_full");
+            string? roleRaw = await js.InvokeAsync<string?>("arenaStorage.get", "aq_auth_role");
+
+            if (!string.IsNullOrWhiteSpace(token) &&
+                !string.IsNullOrWhiteSpace(username) &&
+                Enum.TryParse<UserRole>(roleRaw, out var role))
+            {
+                CurrentUser = new UserSessionDto(username, fullName ?? username, role, token);
+                api.SetBearerToken(token);
+                NotifyStateChanged();
+            }
+        }
+        catch
+        {
+            // Ignore when sessionStorage is unavailable.
+        }
     }
 
     public void ClearError()
@@ -108,9 +137,11 @@ public sealed class GameStateContainer(
             {
                 CurrentRoom = result.Value;
                 IsHostOfCurrentRoom = true;
+                HostControlToken = result.Value.HostControlToken;
                 CurrentPlayerId = null;
                 LastSessionSummary = null;
                 ResetQuestionSelection();
+                await PersistHostKeysAsync(result.Value.RoomCode, HostControlToken);
                 await sound.PlayAsync("join");
             }
             else
@@ -130,6 +161,35 @@ public sealed class GameStateContainer(
             IsBusy = false;
             NotifyStateChanged();
         }
+    }
+
+    public async Task<bool> TryRecoverHostSessionAsync()
+    {
+        try
+        {
+            string? savedCode = await js.InvokeAsync<string?>("arenaStorage.get", "aq_host_room");
+            string? savedHostToken = await js.InvokeAsync<string?>("arenaStorage.get", "aq_host_token");
+            if (string.IsNullOrWhiteSpace(savedCode) || string.IsNullOrWhiteSpace(savedHostToken))
+            {
+                return false;
+            }
+
+            await EnsureConnectedAsync();
+            var res = await _hub!.InvokeAsync<Result<RoomSnapshotDto>>("ReclaimHost", savedCode, savedHostToken);
+            if (res.IsSuccess && res.Value is not null)
+            {
+                CurrentRoom = res.Value;
+                IsHostOfCurrentRoom = true;
+                HostControlToken = savedHostToken;
+                NotifyStateChanged();
+                return true;
+            }
+        }
+        catch
+        {
+            // Ignore stale host recovery tokens.
+        }
+        return false;
     }
 
     public async Task<Result<RoomSnapshotDto>> JoinRoomAsync(string roomCode, string nickname, TeamSide team = TeamSide.None, string? reconnectToken = null)
@@ -156,7 +216,7 @@ public sealed class GameStateContainer(
                     string.Equals(p.Nickname, request.Nickname, StringComparison.OrdinalIgnoreCase));
                 CurrentPlayerId = self?.PlayerId;
 
-                await PersistSessionKeysAsync(result.Value.RoomCode, request.Nickname, ReconnectToken);
+                await PersistPlayerKeysAsync(result.Value.RoomCode, request.Nickname, ReconnectToken);
                 await sound.PlayAsync("join");
             }
             else
@@ -222,6 +282,17 @@ public sealed class GameStateContainer(
         return result;
     }
 
+    public async Task TogglePauseAsync()
+    {
+        if (CurrentRoom is null || _hub is null) return;
+        var result = await _hub.InvokeAsync<Result<bool>>("TogglePauseQuestion", CurrentRoom.RoomCode);
+        if (!result.IsSuccess)
+        {
+            LastError = result.Error;
+            NotifyStateChanged();
+        }
+    }
+
     public async Task<Result<AnswerAckDto>> SubmitAnswerAsync(int optionIndex)
     {
         if (CurrentRoom?.ActiveQuestion is null || CurrentPlayerId is null || _hub is null)
@@ -285,7 +356,12 @@ public sealed class GameStateContainer(
     public async Task RemovePlayerAsync(string playerId)
     {
         if (CurrentRoom is null || _hub is null) return;
-        await _hub.InvokeAsync<Result<bool>>("RemovePlayer", CurrentRoom.RoomCode, playerId);
+        var res = await _hub.InvokeAsync<Result<bool>>("RemovePlayer", CurrentRoom.RoomCode, playerId);
+        if (!res.IsSuccess)
+        {
+            LastError = res.Error;
+            NotifyStateChanged();
+        }
     }
 
     public async Task SendReactionAsync(string reactionKey)
@@ -300,6 +376,7 @@ public sealed class GameStateContainer(
         CurrentRoom = null;
         CurrentPlayerId = null;
         ReconnectToken = null;
+        HostControlToken = null;
         IsHostOfCurrentRoom = false;
         LastSessionSummary = null;
         RecentReactions.Clear();
@@ -307,7 +384,7 @@ public sealed class GameStateContainer(
 
         try
         {
-            await js.InvokeVoidAsync("arenaStorage.clear");
+            await js.InvokeVoidAsync("arenaStorage.clearRoom");
         }
         catch
         {
@@ -353,7 +430,9 @@ public sealed class GameStateContainer(
                     CurrentQuestionIndex = question.QuestionIndex,
                     ActiveQuestion = question,
                     LastReveal = null,
-                    RemainingSeconds = remaining
+                    RemainingSeconds = remaining,
+                    IsPaused = false,
+                    AnsweredCount = 0
                 };
             }
             NotifyStateChanged();
@@ -368,6 +447,32 @@ public sealed class GameStateContainer(
             if (remaining is > 0 and <= 5)
             {
                 await sound.PlayAsync("tick");
+            }
+            NotifyStateChanged();
+        });
+
+        hub.On<AnswerProgressDto>("AnswerProgressUpdated", progress =>
+        {
+            if (CurrentRoom is not null)
+            {
+                CurrentRoom = CurrentRoom with
+                {
+                    AnsweredCount = progress.AnsweredCount,
+                    ActivePlayerCount = progress.TotalActivePlayers
+                };
+            }
+            NotifyStateChanged();
+        });
+
+        hub.On<bool, int>("PauseStateChanged", (isPaused, remaining) =>
+        {
+            if (CurrentRoom is not null)
+            {
+                CurrentRoom = CurrentRoom with
+                {
+                    IsPaused = isPaused,
+                    RemainingSeconds = remaining
+                };
             }
             NotifyStateChanged();
         });
@@ -387,6 +492,7 @@ public sealed class GameStateContainer(
                     Phase = RoomPhase.QuestionReveal,
                     LastReveal = reveal,
                     RemainingSeconds = 0,
+                    IsPaused = false,
                     Players = reveal.Leaderboard,
                     Teams = reveal.TeamLeaderboard
                 };
@@ -405,7 +511,7 @@ public sealed class GameStateContainer(
             LastSessionSummary = summary;
             if (CurrentRoom is not null)
             {
-                CurrentRoom = CurrentRoom with { Phase = RoomPhase.PodiumFinished };
+                CurrentRoom = CurrentRoom with { Phase = RoomPhase.PodiumFinished, IsPaused = false };
             }
             await sound.PlayAsync("podium");
             NotifyStateChanged();
@@ -435,7 +541,11 @@ public sealed class GameStateContainer(
 
         hub.Reconnected += async _ =>
         {
-            if (!IsHostOfCurrentRoom && CurrentRoom is not null && CurrentNickname is not null)
+            if (IsHostOfCurrentRoom && CurrentRoom is not null && !string.IsNullOrWhiteSpace(HostControlToken))
+            {
+                await _hub!.InvokeAsync<Result<RoomSnapshotDto>>("ReclaimHost", CurrentRoom.RoomCode, HostControlToken);
+            }
+            else if (!IsHostOfCurrentRoom && CurrentRoom is not null && CurrentNickname is not null)
             {
                 await JoinRoomAsync(CurrentRoom.RoomCode, CurrentNickname, TeamSide.None, ReconnectToken);
             }
@@ -456,7 +566,7 @@ public sealed class GameStateContainer(
         LastAnswerAck = null;
     }
 
-    private async Task PersistSessionKeysAsync(string roomCode, string nickname, string? token)
+    private async Task PersistPlayerKeysAsync(string roomCode, string nickname, string? token)
     {
         try
         {
@@ -467,10 +577,32 @@ public sealed class GameStateContainer(
                 await js.InvokeVoidAsync("arenaStorage.set", "aq_token", token);
             }
         }
-        catch
+        catch { }
+    }
+
+    private async Task PersistHostKeysAsync(string roomCode, string? hostToken)
+    {
+        try
         {
-            // Ignore when sessionStorage is unavailable.
+            await js.InvokeVoidAsync("arenaStorage.set", "aq_host_room", roomCode);
+            if (!string.IsNullOrWhiteSpace(hostToken))
+            {
+                await js.InvokeVoidAsync("arenaStorage.set", "aq_host_token", hostToken);
+            }
         }
+        catch { }
+    }
+
+    private async Task PersistAuthSessionAsync(UserSessionDto session)
+    {
+        try
+        {
+            await js.InvokeVoidAsync("arenaStorage.set", "aq_auth_token", session.Token);
+            await js.InvokeVoidAsync("arenaStorage.set", "aq_auth_user", session.Username);
+            await js.InvokeVoidAsync("arenaStorage.set", "aq_auth_full", session.FullName);
+            await js.InvokeVoidAsync("arenaStorage.set", "aq_auth_role", session.Role.ToString());
+        }
+        catch { }
     }
 
     private void NotifyStateChanged() => OnStateChanged?.Invoke();
@@ -484,4 +616,3 @@ public sealed class GameStateContainer(
         _connectLock.Dispose();
     }
 }
-

@@ -1,17 +1,31 @@
+@inject LocalizationService L
+@implements IDisposable
+
 <nav class="aq-nav" aria-label="Main navigation">
     <NavLink class="aq-nav-link" href="" Match="NavLinkMatch.All">
-        <span>Lobby</span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+        <span>@L.T("nav.lobby")</span>
     </NavLink>
     <NavLink class="aq-nav-link" href="play">
-        <span>Play Arena</span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        <span>@L.T("nav.play")</span>
     </NavLink>
     <NavLink class="aq-nav-link" href="host">
-        <span>Host Studio</span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+        <span>@L.T("nav.host")</span>
     </NavLink>
     <NavLink class="aq-nav-link" href="analytics">
-        <span>History &amp; CSV</span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+        <span>@L.T("nav.analytics")</span>
     </NavLink>
     <NavLink class="aq-nav-link" href="auth">
-        <span>Roles (RBAC)</span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+        <span>@L.T("nav.auth")</span>
     </NavLink>
 </nav>
+
+@code {
+    protected override void OnInitialized() => L.OnLanguageChanged += OnLangChanged;
+    private void OnLangChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => L.OnLanguageChanged -= OnLangChanged;
+}

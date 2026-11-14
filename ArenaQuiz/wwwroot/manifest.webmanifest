@@ -1,0 +1,17 @@
+{
+  "name": "ArenaQuiz — Live Multiplayer Quiz Platform",
+  "short_name": "ArenaQuiz",
+  "description": "Real-time multiplayer academic quiz platform powered by .NET 10 Blazor WebAssembly and SignalR.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F6F2",
+  "theme_color": "#D9381E",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}
+

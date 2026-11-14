@@ -6,9 +6,11 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#D9381E" />
     <base href="/" />
     <title>ArenaQuiz — Real-Time Quiz Platform</title>
     <ResourcePreloader />
+    <link rel="manifest" href="manifest.webmanifest" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
@@ -27,14 +29,38 @@
         window.arenaStorage = {
             set: (k, v) => { try { sessionStorage.setItem(k, v); } catch { } },
             get: (k) => { try { return sessionStorage.getItem(k); } catch { return null; } },
-            clear: () => {
+            clearRoom: () => {
                 try {
                     sessionStorage.removeItem('aq_room');
                     sessionStorage.removeItem('aq_nick');
                     sessionStorage.removeItem('aq_token');
+                    sessionStorage.removeItem('aq_host_room');
+                    sessionStorage.removeItem('aq_host_token');
+                } catch { }
+            },
+            clear: () => {
+                try {
+                    sessionStorage.clear();
                 } catch { }
             }
         };
+
+        window.arenaTheme = (() => {
+            const apply = (mode) => {
+                document.documentElement.setAttribute('data-theme', mode);
+                try { localStorage.setItem('aq_theme', mode); } catch { }
+                return mode;
+            };
+            try {
+                const saved = localStorage.getItem('aq_theme');
+                const preferred = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+                document.documentElement.setAttribute('data-theme', preferred);
+            } catch { }
+            return {
+                get: () => document.documentElement.getAttribute('data-theme') || 'light',
+                toggle: () => apply((document.documentElement.getAttribute('data-theme') === 'dark') ? 'light' : 'dark')
+            };
+        })();
 
         window.arenaAudio = (() => {
             let ctx = null;
@@ -76,6 +102,10 @@
                 }
             };
         })();
+
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/service-worker.js').catch(() => { });
+        }
     </script>
     <script src="@Assets["_framework/blazor.web.js"]"></script>
 </body>

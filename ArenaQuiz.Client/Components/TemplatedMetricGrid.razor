@@ -3,20 +3,20 @@
 <div class="aq-card">
     @if (HeaderTemplate is not null)
     {
-        <div style="margin-bottom:0.85rem;">
+        <div class="aq-mb-md">
             @HeaderTemplate
         </div>
     }
 
     @if (Items is null || Items.Count == 0)
     {
-        <div class="aq-card-elevated" style="text-align:center; color:var(--text-secondary); padding:1.5rem;">
+        <div class="aq-card-elevated aq-empty-state">
             @EmptyMessage
         </div>
     }
     else
     {
-        <div style="display:flex; flex-direction:column; gap:0.65rem;">
+        <div class="aq-stack-sm">
             @foreach (var item in Items)
             {
                 @RowTemplate(item)
@@ -38,4 +38,3 @@
     [Parameter]
     public string EmptyMessage { get; set; } = "No records found.";
 }
-

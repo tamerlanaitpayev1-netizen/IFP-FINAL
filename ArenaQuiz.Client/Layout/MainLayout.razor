@@ -1,6 +1,8 @@
 @inherits LayoutComponentBase
 @inject GameStateContainer GameState
 @inject SoundService Sound
+@inject LocalizationService L
+@inject IJSRuntime JS
 @implements IDisposable
 
 <CascadingValue Value="GameState" IsFixed="true">
@@ -19,21 +21,30 @@
                 <NavMenu />
 
                 <div class="aq-topbar-actions">
+                    <select class="aq-select aq-lang-select"
+                            aria-label="Language"
+                            value="@L.CurrentLanguage"
+                            @onchange="OnLanguageChanged">
+                        <option value="en">EN</option>
+                        <option value="ru">RU</option>
+                        <option value="kk">KK</option>
+                    </select>
+
+                    <button type="button"
+                            class="aq-btn aq-btn-secondary aq-btn-sm"
+                            title="Toggle light or dark theme"
+                            @onclick="ToggleThemeAsync">
+                        @(_theme == "dark" ? "Light" : "Dark")
+                    </button>
+
                     <button type="button"
                             class="aq-btn aq-btn-secondary aq-btn-sm"
                             title="@(Sound.IsMuted ? "Unmute sound cues" : "Mute sound cues")"
                             @onclick="ToggleMute">
-                        @if (Sound.IsMuted)
-                        {
-                            <span>Audio Off</span>
-                        }
-                        else
-                        {
-                            <span>Audio On</span>
-                        }
+                        @(Sound.IsMuted ? "Audio Off" : "Audio On")
                     </button>
 
-                    <a href="auth" class="aq-badge @(GameState.CurrentUser.Role == UserRole.Host ? "aq-badge-cobalt" : "aq-badge-emerald")" style="text-decoration:none;">
+                    <a href="auth" class="aq-badge @(GameState.CurrentUser.Role == UserRole.Host ? "aq-badge-cobalt" : "aq-badge-emerald")">
                         <span>@GameState.CurrentUser.FullName</span>
                     </a>
                 </div>
@@ -54,20 +65,49 @@
 </div>
 
 @code {
+    private string _theme = "light";
+
     protected override void OnInitialized()
     {
         GameState.OnStateChanged += HandleStateChanged;
+        L.OnLanguageChanged += HandleStateChanged;
     }
 
-    private void ToggleMute()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        Sound.ToggleMute();
+        if (firstRender)
+        {
+            await GameState.TryRestoreAuthSessionAsync();
+            try
+            {
+                _theme = await JS.InvokeAsync<string>("arenaTheme.get");
+                StateHasChanged();
+            }
+            catch { }
+        }
     }
+
+    private async Task ToggleThemeAsync()
+    {
+        try
+        {
+            _theme = await JS.InvokeAsync<string>("arenaTheme.toggle");
+        }
+        catch { }
+    }
+
+    private void OnLanguageChanged(ChangeEventArgs e)
+    {
+        L.SetLanguage(e.Value?.ToString() ?? "en");
+    }
+
+    private void ToggleMute() => Sound.ToggleMute();
 
     private void HandleStateChanged() => InvokeAsync(StateHasChanged);
 
     public void Dispose()
     {
         GameState.OnStateChanged -= HandleStateChanged;
+        L.OnLanguageChanged -= HandleStateChanged;
     }
 }

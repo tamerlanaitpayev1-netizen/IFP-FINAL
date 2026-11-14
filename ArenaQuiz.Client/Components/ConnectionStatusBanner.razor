@@ -2,7 +2,7 @@
 
 @if (GameState is not null && !string.IsNullOrWhiteSpace(GameState.LastError))
 {
-    <div class="aq-card" style="margin-bottom:1rem; border-color:var(--crimson-border); background-color:var(--crimson-bg); color:var(--crimson-text); display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
+    <div class="aq-alert aq-alert-crimson aq-mb-md">
         <div>
             <strong>Notice:</strong> @GameState.LastError
         </div>
@@ -14,8 +14,10 @@
 
 @if (GameState is not null && GameState.ConnectionState == HubConnectionState.Reconnecting)
 {
-    <div class="aq-card" style="margin-bottom:1rem; border-color:var(--amber-border); background-color:var(--amber-bg); color:var(--amber-text);">
-        <strong>SignalR Reconnecting...</strong> Restoring live WebSocket stream automatically.
+    <div class="aq-alert aq-alert-amber aq-mb-md">
+        <div>
+            <strong>Reconnecting...</strong> Restoring live connection automatically.
+        </div>
     </div>
 }
 
@@ -23,4 +25,3 @@
     [CascadingParameter]
     public GameStateContainer? GameState { get; set; }
 }
-

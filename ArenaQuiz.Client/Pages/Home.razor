@@ -1,41 +1,35 @@
 @page "/"
 @inject QuizApiClient Api
 @inject GameStateContainer GameState
+@inject LocalizationService L
 @inject NavigationManager Navigation
+@implements IDisposable
 
 <PageTitle>ArenaQuiz — Live Real-Time Quiz Platform</PageTitle>
 
-<div class="aq-enter" style="display:flex; flex-direction:column; gap:1.5rem;">
-    <section class="aq-grid-2" style="align-items:stretch;">
-        <div class="aq-card" style="display:flex; flex-direction:column; justify-content:space-between; gap:1rem;">
+<div class="aq-enter aq-stack-lg">
+    <section class="aq-grid-2">
+        <div class="aq-card aq-card-split">
             <div>
-                <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.65rem;">
-                    <span class="aq-badge aq-badge-accent">SignalR Real-Time</span>
-                    <span class="aq-badge aq-badge-neutral">.NET 10 Blazor WASM</span>
+                <div class="aq-row-wrap aq-mb-sm">
+                    <span class="aq-badge aq-badge-accent">@L.T("home.badge.rt")</span>
+                    <span class="aq-badge aq-badge-neutral">@L.T("home.badge.stack")</span>
                 </div>
-                <h1 style="font-size:clamp(1.7rem, 3.2vw, 2.35rem); margin:0 0 0.65rem; font-weight:700; line-height:1.15;">
-                    Multiplayer Quiz Arena Built for Speed and Integrity.
-                </h1>
-                <p style="margin:0; color:var(--text-secondary); font-size:1rem;">
-                    Host live quizzes with server-authoritative anti-cheat timers, Classic Speed, Team Battle, and Knockout Elimination modes across desktop, tablet, and mobile.
-                </p>
+                <h1 class="aq-heading-hero">@L.T("home.title")</h1>
+                <p class="aq-text-muted">@L.T("home.subtitle")</p>
             </div>
 
-            <div style="display:flex; flex-wrap:wrap; gap:0.65rem;">
-                <a href="host" class="aq-btn aq-btn-dark">
-                    Open Host Studio
-                </a>
-                <a href="analytics" class="aq-btn aq-btn-secondary">
-                    History &amp; CSV Export
-                </a>
+            <div class="aq-row-wrap">
+                <a href="host" class="aq-btn aq-btn-dark">@L.T("home.open_host")</a>
+                <a href="analytics" class="aq-btn aq-btn-secondary">@L.T("home.view_results")</a>
             </div>
         </div>
 
         <div class="aq-card">
-            <h2 style="margin:0 0 0.85rem; font-size:1.2rem; font-weight:700;">Join a Live Room</h2>
-            <div style="display:flex; flex-direction:column; gap:0.85rem;">
+            <h2 class="aq-heading-md aq-mb-md">@L.T("home.join_title")</h2>
+            <div class="aq-stack-md">
                 <div>
-                    <label class="aq-label" for="home-pin">Room PIN</label>
+                    <label class="aq-label" for="home-pin">@L.T("home.pin")</label>
                     <input id="home-pin"
                            class="aq-input aq-pin-input"
                            placeholder="AQ4829"
@@ -44,9 +38,9 @@
                            @bind:event="oninput" />
                 </div>
 
-                <div class="aq-grid-2" style="gap:0.75rem;">
+                <div class="aq-grid-2">
                     <div>
-                        <label class="aq-label" for="home-nick">Nickname</label>
+                        <label class="aq-label" for="home-nick">@L.T("home.nick")</label>
                         <input id="home-nick"
                                class="aq-input"
                                placeholder="e.g. Amina_CS"
@@ -54,7 +48,7 @@
                                @bind="_nickname" />
                     </div>
                     <div>
-                        <label class="aq-label" for="home-team">Team (if Team Battle)</label>
+                        <label class="aq-label" for="home-team">@L.T("home.team")</label>
                         <select id="home-team" class="aq-select" @bind="_preferredTeam">
                             <option value="@TeamSide.None">Auto-Balance</option>
                             <option value="@TeamSide.Alpha">Team Alpha</option>
@@ -66,37 +60,35 @@
 
                 @if (!string.IsNullOrWhiteSpace(_joinError))
                 {
-                    <div class="aq-badge aq-badge-crimson" style="border-radius:var(--radius-sm); padding:0.55rem 0.75rem;">
-                        @_joinError
-                    </div>
+                    <div class="aq-alert aq-alert-crimson">@_joinError</div>
                 }
 
                 <button type="button"
                         class="aq-btn aq-btn-primary"
                         disabled="@_isJoining"
                         @onclick="JoinFromHomeAsync">
-                    @(_isJoining ? "Connecting..." : "Join Arena")
+                    @(_isJoining ? "Connecting..." : L.T("home.join_btn"))
                 </button>
             </div>
         </div>
     </section>
 
     <section class="aq-card">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.85rem;">
+        <div class="aq-row-between aq-mb-md">
             <div>
-                <h2 style="margin:0; font-size:1.15rem; font-weight:700;">Active Open Lobbies</h2>
-                <div style="font-size:0.84rem; color:var(--text-secondary);">Click a room below to pre-fill its PIN and join immediately.</div>
+                <h2 class="aq-heading-md">@L.T("home.open_rooms")</h2>
+                <div class="aq-text-xs">Select a room to pre-fill its PIN and join immediately.</div>
             </div>
             <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="RefreshOpenRoomsAsync">
-                Refresh Rooms
+                @L.T("home.refresh")
             </button>
         </div>
 
         @if (_openRooms.Count == 0)
         {
-            <div class="aq-card-elevated" style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
-                <span style="color:var(--text-secondary);">No live rooms are open right now. Launch one in Host Studio to test live gameplay.</span>
-                <a href="host" class="aq-btn aq-btn-primary aq-btn-sm">Create Room</a>
+            <div class="aq-card-elevated aq-row-between">
+                <span class="aq-text-muted">No live rooms are open right now. Launch one in Host Studio.</span>
+                <a href="host" class="aq-btn aq-btn-primary aq-btn-sm">@L.T("home.open_host")</a>
             </div>
         }
         else
@@ -104,14 +96,14 @@
             <div class="aq-grid-3">
                 @foreach (var room in _openRooms)
                 {
-                    <div class="aq-card-elevated" style="display:flex; flex-direction:column; justify-content:space-between; gap:0.75rem;">
+                    <div class="aq-card-elevated aq-card-split">
                         <div>
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
-                                <span class="tabular" style="font-family:var(--font-mono); font-weight:700; font-size:1.05rem;">@room.RoomCode</span>
+                            <div class="aq-row-between">
+                                <span class="font-mono-code tabular">@room.RoomCode</span>
                                 <span class="aq-badge aq-badge-emerald">@room.Phase</span>
                             </div>
-                            <div style="font-weight:700; margin-top:0.35rem;">@room.QuizTitle</div>
-                            <div style="font-size:0.82rem; color:var(--text-secondary);">
+                            <strong class="aq-block aq-mt-sm">@room.QuizTitle</strong>
+                            <div class="aq-text-xs">
                                 Host: @room.HostName &middot; @room.PlayerCount players &middot; @room.Mode
                             </div>
                         </div>
@@ -127,17 +119,17 @@
     </section>
 
     <section class="aq-card">
-        <h2 style="margin:0 0 0.85rem; font-size:1.15rem; font-weight:700;">Available Quiz Library (@_quizzes.Count)</h2>
+        <h2 class="aq-heading-md aq-mb-md">@L.T("home.library") (@_quizzes.Count)</h2>
         <div class="aq-grid-3">
             @foreach (var quiz in _quizzes)
             {
-                <div class="aq-card-elevated" style="display:flex; flex-direction:column; justify-content:space-between; gap:0.65rem;">
+                <div class="aq-card-elevated aq-card-split">
                     <div>
                         <span class="aq-badge aq-badge-cobalt">@quiz.Category</span>
-                        <h3 style="margin:0.5rem 0 0.35rem; font-size:1.02rem; font-weight:700;">@quiz.Title</h3>
-                        <p style="margin:0; font-size:0.86rem; color:var(--text-secondary);">@quiz.Description</p>
+                        <h3 class="aq-heading-md aq-mt-sm">@quiz.Title</h3>
+                        <p class="aq-text-muted">@quiz.Description</p>
                     </div>
-                    <div style="font-size:0.8rem; color:var(--text-secondary); display:flex; justify-content:space-between;" class="tabular">
+                    <div class="aq-row-between aq-text-xs tabular">
                         <span>@quiz.QuestionCount questions &middot; ~@quiz.DefaultTimeLimitSeconds s</span>
                         <span>by @quiz.CreatedBy</span>
                     </div>
@@ -158,9 +150,12 @@
 
     protected override async Task OnInitializedAsync()
     {
+        L.OnLanguageChanged += OnLangChanged;
         await RefreshOpenRoomsAsync();
         _quizzes = await Api.GetQuizzesAsync();
     }
+
+    private void OnLangChanged() => InvokeAsync(StateHasChanged);
 
     private async Task RefreshOpenRoomsAsync()
     {
@@ -174,10 +169,7 @@
         }
     }
 
-    private void SelectRoomPin(string code)
-    {
-        _roomCode = code;
-    }
+    private void SelectRoomPin(string code) => _roomCode = code;
 
     private async Task JoinFromHomeAsync()
     {
@@ -207,4 +199,6 @@
             _joinError = res.Error ?? "Could not join room.";
         }
     }
+
+    public void Dispose() => L.OnLanguageChanged -= OnLangChanged;
 }
