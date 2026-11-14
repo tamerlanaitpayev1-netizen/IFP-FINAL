@@ -36,7 +36,7 @@ Thumbs.db
 repomix-output*
 
 # Local defense cheat sheets, root LMS export PDF & git workflow notes (kept on disk, excluded from repo)
-ArenaQuiz_Presentation.pdf
+/ArenaQuiz_Presentation.pdf
 docs/TEAM_GIT_WORKFLOW.md
 docs/DEFENSE_QA_GUIDE.md
 docs/PRESENTATION_SLIDES.md
