@@ -61,6 +61,14 @@ public sealed record QuestionRevealDto(
     IReadOnlyList<TeamStandingDto> TeamLeaderboard,
     IReadOnlyList<string> NewlyEliminatedNicknames);
 
+/// <summary>
+/// Lightweight O(1) progress delta sent as players submit answers instead of re-broadcasting full room snapshots.
+/// </summary>
+public sealed record AnswerProgressDto(
+    int QuestionIndex,
+    int AnsweredCount,
+    int TotalActivePlayers);
+
 public sealed record RoomSnapshotDto(
     string RoomCode,
     string QuizTitle,
@@ -75,7 +83,11 @@ public sealed record RoomSnapshotDto(
     IReadOnlyList<TeamStandingDto> Teams,
     LiveQuestionViewDto? ActiveQuestion,
     QuestionRevealDto? LastReveal,
-    string? ReconnectToken);
+    string? ReconnectToken,
+    bool IsPaused = false,
+    int AnsweredCount = 0,
+    int ActivePlayerCount = 0,
+    string? HostControlToken = null);
 
 public sealed record ReactionEventDto(
     string RoomCode,
@@ -98,4 +110,3 @@ public sealed record AnswerAckDto(
     double ServerElapsedMs,
     bool Accepted,
     string Message);
-

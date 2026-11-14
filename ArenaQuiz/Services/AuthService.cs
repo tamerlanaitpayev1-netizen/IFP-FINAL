@@ -1,13 +1,15 @@
 using ArenaQuiz.Data;
+using ArenaQuiz.Security;
 using ArenaQuiz.Shared.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArenaQuiz.Services;
 
 /// <summary>
-/// Role-Based Access Control (RBAC) service backed by SQLite UserAccounts.
+/// Role-Based Access Control (RBAC) service backed by SQLite UserAccounts,
+/// PBKDF2-SHA256 salted password verification, and HMAC-SHA256 signed bearer tokens.
 /// </summary>
-public sealed class AuthService(ArenaDbContext db)
+public sealed class AuthService(ArenaDbContext db, TokenService tokenService)
 {
     public async Task<Result<UserSessionDto>> LoginAsync(LoginRequest request, CancellationToken ct = default)
     {
@@ -17,13 +19,11 @@ public sealed class AuthService(ArenaDbContext db)
         }
 
         string normalized = request.Username.Trim().ToLowerInvariant();
-        string hash = DbSeeder.HashPassword(request.Password);
-
         var user = await db.Users
             .AsNoTracking()
-            .FirstOrDefaultAsync(u => u.Username == normalized && u.PasswordHash == hash, ct);
+            .FirstOrDefaultAsync(u => u.Username == normalized, ct);
 
-        if (user is null)
+        if (user is null || !TokenService.VerifyPassword(request.Password, user.PasswordHash))
         {
             return Result<UserSessionDto>.Failure("Invalid username or password.");
         }
@@ -31,7 +31,10 @@ public sealed class AuthService(ArenaDbContext db)
         return Result<UserSessionDto>.Success(BuildSession(user));
     }
 
-    public async Task<Result<UserSessionDto>> QuickSwitchAsync(string username, CancellationToken ct = default)
+    /// <summary>
+    /// Issues a guest/player session without password. Elevating to Host or Admin strictly requires LoginAsync.
+    /// </summary>
+    public async Task<Result<UserSessionDto>> QuickSwitchPlayerAsync(string username, CancellationToken ct = default)
     {
         string normalized = username.Trim().ToLowerInvariant();
         var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Username == normalized, ct);
@@ -40,13 +43,17 @@ public sealed class AuthService(ArenaDbContext db)
             return Result<UserSessionDto>.Failure($"Account '{username}' not found.");
         }
 
+        if (user.Role != UserRole.Player)
+        {
+            return Result<UserSessionDto>.Failure("Elevating to Host/Admin requires password authentication.");
+        }
+
         return Result<UserSessionDto>.Success(BuildSession(user));
     }
 
-    private static UserSessionDto BuildSession(UserAccountEntity user)
+    private UserSessionDto BuildSession(UserAccountEntity user)
     {
-        string token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{user.Username}:{user.Role}:{DateTime.UtcNow.Ticks}"));
-        return new UserSessionDto(user.Username, user.FullName, user.Role, token);
+        var (token, expires) = tokenService.IssueToken(user.Username, user.FullName, user.Role);
+        return new UserSessionDto(user.Username, user.FullName, user.Role, token, expires);
     }
 }
-

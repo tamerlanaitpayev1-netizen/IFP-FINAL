@@ -3,7 +3,9 @@ using ArenaQuiz.Client.Services;
 using ArenaQuiz.Components;
 using ArenaQuiz.Data;
 using ArenaQuiz.Hubs;
+using ArenaQuiz.Security;
 using ArenaQuiz.Services;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Components;
 using Microsoft.EntityFrameworkCore;
 
@@ -14,14 +16,21 @@ builder.Services.AddRazorComponents()
 
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
+builder.Services.AddHealthChecks();
 
 builder.Services.AddDbContext<ArenaDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=arenaquiz.db"));
+
+builder.Services.AddSingleton<TokenService>();
+builder.Services.AddAuthentication(ArenaBearerAuthHandler.SchemeName)
+    .AddScheme<AuthenticationSchemeOptions, ArenaBearerAuthHandler>(ArenaBearerAuthHandler.SchemeName, _ => { });
+builder.Services.AddAuthorization();
 
 builder.Services.AddScoped<QuizRepositoryService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddSingleton<IGameRoomBroadcaster, SignalRGameRoomBroadcaster>();
 builder.Services.AddSingleton<GameRoomService>();
+builder.Services.AddHostedService<RoomCleanupHostedService>();
 
 // Client services registered on server with NavigationManager.BaseUri for seamless prerendering.
 builder.Services.AddScoped(sp =>
@@ -29,6 +38,7 @@ builder.Services.AddScoped(sp =>
     var nav = sp.GetRequiredService<NavigationManager>();
     return new HttpClient { BaseAddress = new Uri(nav.BaseUri) };
 });
+builder.Services.AddScoped<LocalizationService>();
 builder.Services.AddScoped<QuizApiClient>();
 builder.Services.AddScoped<SoundService>();
 builder.Services.AddScoped<GameStateContainer>();
@@ -51,12 +61,36 @@ else
     app.UseHsts();
 }
 
-app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+app.UseWhen(
+    ctx => !ctx.Request.Path.StartsWithSegments("/api") && !ctx.Request.Path.StartsWithSegments("/gamehub"),
+    branch => branch.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true));
 app.UseAntiforgery();
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapStaticAssets();
 app.MapControllers();
 app.MapHub<GameHub>("/gamehub");
+app.MapHealthChecks("/healthz");
+
+app.MapGet("/api/openapi.json", () => Results.Ok(new
+{
+    openapi = "3.0.3",
+    info = new { title = "ArenaQuiz Real-Time API", version = "2.0.0" },
+    paths = new Dictionary<string, object>
+    {
+        ["/api/quizzes"] = new { get = "List quiz summaries", post = "[Host] Create quiz" },
+        ["/api/quizzes/{id}"] = new { get = "Public quiz preview (omits answers)", put = "[Host] Update quiz", delete = "[Host] Delete quiz" },
+        ["/api/quizzes/{id}/edit"] = new { get = "[Host] Full quiz payload with answers" },
+        ["/api/rooms/open"] = new { get = "Active lobbies" },
+        ["/api/sessions/analytics"] = new { get = "Session history and hardest question stats" },
+        ["/api/sessions/{id}/export.csv"] = new { get = "RFC-4180 CSV export" },
+        ["/api/auth/login"] = new { post = "PBKDF2 login returning signed HMAC-SHA256 bearer token" },
+        ["/healthz"] = new { get = "Liveness health check" },
+        ["/gamehub"] = new { signalr = "Real-time GameHub (WebSockets)" }
+    }
+}));
 
 app.MapRazorComponents<App>()
     .AddInteractiveWebAssemblyRenderMode()

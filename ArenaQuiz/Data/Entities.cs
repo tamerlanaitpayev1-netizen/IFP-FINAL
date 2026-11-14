@@ -57,6 +57,16 @@ public sealed class PlayerResultEntity
     public bool WasEliminated { get; set; }
 }
 
+public sealed class QuestionStatEntity
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid QuestionId { get; set; }
+    public string QuizTitle { get; set; } = string.Empty;
+    public string Prompt { get; set; } = string.Empty;
+    public int TotalAttempts { get; set; }
+    public int CorrectAttempts { get; set; }
+}
+
 public sealed class UserAccountEntity
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -65,4 +75,3 @@ public sealed class UserAccountEntity
     public string PasswordHash { get; set; } = string.Empty;
     public UserRole Role { get; set; }
 }
-

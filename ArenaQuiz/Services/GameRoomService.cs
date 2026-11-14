@@ -1,12 +1,13 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using ArenaQuiz.Shared.Functional;
 using ArenaQuiz.Shared.Models;
 
 namespace ArenaQuiz.Services;
 
 /// <summary>
-/// Thread-safe singleton engine managing concurrent SignalR quiz rooms, authoritative server timers,
-/// anti-cheat timestamp validation, reconnection recovery, and SQLite session persistence.
+/// Thread-safe singleton engine managing concurrent SignalR quiz rooms, wall-clock drift-free server timers,
+/// host-only authorization, anti-impersonation connection binding, O(P) answer progress deltas, and room eviction.
 /// </summary>
 public sealed class GameRoomService(
     IServiceScopeFactory scopeFactory,
@@ -15,6 +16,7 @@ public sealed class GameRoomService(
 {
     private readonly ConcurrentDictionary<string, ActiveRoomState> _rooms = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (string RoomCode, string PlayerId)> _connections = new();
+    private readonly ConcurrentDictionary<string, DateTime> _reactionCooldowns = new();
 
     public async Task<Result<RoomSnapshotDto>> CreateRoomAsync(CreateRoomRequest request, string hostConnectionId)
     {
@@ -33,16 +35,42 @@ public sealed class GameRoomService(
         }
 
         string code = GenerateUniqueRoomCode();
+        string hostControlToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
         var room = new ActiveRoomState(
             code,
             quiz,
             string.IsNullOrWhiteSpace(request.HostName) ? "Host" : request.HostName.Trim(),
             request.Mode,
             request.AutoAdvance,
-            hostConnectionId);
+            hostConnectionId,
+            hostControlToken);
 
         _rooms[code] = room;
-        return Result<RoomSnapshotDto>.Success(room.BuildSnapshot());
+        return Result<RoomSnapshotDto>.Success(room.BuildSnapshot(hostControlToken: hostControlToken));
+    }
+
+    public Task<Result<RoomSnapshotDto>> ReclaimHostAsync(string roomCode, string hostControlToken, string newConnectionId)
+    {
+        string code = roomCode.Trim().ToUpperInvariant();
+        if (!_rooms.TryGetValue(code, out var room))
+        {
+            return Task.FromResult(Result<RoomSnapshotDto>.Failure("Room not found or already closed."));
+        }
+
+        lock (room.SyncRoot)
+        {
+            if (string.IsNullOrWhiteSpace(hostControlToken) ||
+                !CryptographicOperations.FixedTimeEquals(
+                    System.Text.Encoding.UTF8.GetBytes(room.HostControlToken),
+                    System.Text.Encoding.UTF8.GetBytes(hostControlToken.Trim())))
+            {
+                return Task.FromResult(Result<RoomSnapshotDto>.Failure("Unauthorized: invalid host recovery token."));
+            }
+
+            room.HostConnectionId = newConnectionId;
+            room.LastActivityUtc = DateTime.UtcNow;
+            return Task.FromResult(Result<RoomSnapshotDto>.Success(room.BuildSnapshot(hostControlToken: room.HostControlToken)));
+        }
     }
 
     public async Task<Result<(RoomSnapshotDto Snapshot, PlayerStandingDto Player, bool IsReconnect)>> JoinRoomAsync(
@@ -72,29 +100,29 @@ public sealed class GameRoomService(
                 return Result<(RoomSnapshotDto, PlayerStandingDto, bool)>.Failure("This game session has already finished.");
             }
 
-            PlayerState? existing = null;
-            if (!string.IsNullOrWhiteSpace(request.ReconnectToken))
-            {
-                existing = room.Players.Values.FirstOrDefault(p => p.ReconnectToken == request.ReconnectToken);
-            }
+            room.LastActivityUtc = DateTime.UtcNow;
 
-            existing ??= room.Players.Values.FirstOrDefault(p =>
+            PlayerState? existingByToken = !string.IsNullOrWhiteSpace(request.ReconnectToken)
+                ? room.Players.Values.FirstOrDefault(p => p.ReconnectToken == request.ReconnectToken)
+                : null;
+
+            PlayerState? existingByNick = room.Players.Values.FirstOrDefault(p =>
                 string.Equals(p.Nickname, nickname, StringComparison.OrdinalIgnoreCase));
 
-            if (existing is not null)
+            if (existingByToken is not null)
             {
-                if (existing.IsConnected && existing.ConnectionId != connectionId &&
-                    string.IsNullOrWhiteSpace(request.ReconnectToken))
-                {
-                    return Result<(RoomSnapshotDto, PlayerStandingDto, bool)>.Failure($"Nickname '{nickname}' is already active in this room.");
-                }
-
-                existing.ConnectionId = connectionId;
-                existing.IsConnected = true;
+                existingByToken.ConnectionId = connectionId;
+                existingByToken.IsConnected = true;
                 isReconnect = true;
-                _connections[connectionId] = (code, existing.PlayerId);
-                snapshot = room.BuildSnapshot(existing.ReconnectToken);
-                standing = snapshot.Players.First(p => p.PlayerId == existing.PlayerId);
+                _connections[connectionId] = (code, existingByToken.PlayerId);
+                snapshot = room.BuildSnapshot(reconnectToken: existingByToken.ReconnectToken);
+                standing = snapshot.Players.First(p => p.PlayerId == existingByToken.PlayerId);
+            }
+            else if (existingByNick is not null)
+            {
+                // Security: prevent hijacking a disconnected player's nickname without their secret ReconnectToken.
+                return Result<(RoomSnapshotDto, PlayerStandingDto, bool)>.Failure(
+                    $"Nickname '{nickname}' is already registered in this room. Use your original browser session to reconnect.");
             }
             else
             {
@@ -103,12 +131,12 @@ public sealed class GameRoomService(
                     : TeamSide.None;
 
                 string playerId = Guid.NewGuid().ToString("N")[..10];
-                string token = Guid.NewGuid().ToString("N");
+                string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
                 var player = new PlayerState(playerId, nickname, team, token, connectionId);
                 room.Players[playerId] = player;
                 _connections[connectionId] = (code, playerId);
 
-                snapshot = room.BuildSnapshot(token);
+                snapshot = room.BuildSnapshot(reconnectToken: token);
                 standing = snapshot.Players.First(p => p.PlayerId == playerId);
             }
         }
@@ -122,11 +150,11 @@ public sealed class GameRoomService(
             await broadcaster.PlayerJoined(code, standing);
         }
 
-        await broadcaster.RoomStateUpdated(code, snapshot with { ReconnectToken = null });
+        await broadcaster.RoomStateUpdated(code, snapshot with { ReconnectToken = null, HostControlToken = null });
         return Result<(RoomSnapshotDto, PlayerStandingDto, bool)>.Success((snapshot, standing, isReconnect));
     }
 
-    public async Task<Result<RoomSnapshotDto>> StartGameAsync(string roomCode)
+    public async Task<Result<RoomSnapshotDto>> StartGameAsync(string roomCode, string callerConnectionId)
     {
         if (!_rooms.TryGetValue(roomCode.Trim().ToUpperInvariant(), out var room))
         {
@@ -139,6 +167,11 @@ public sealed class GameRoomService(
 
         lock (room.SyncRoot)
         {
+            if (room.HostConnectionId != callerConnectionId)
+            {
+                return Result<RoomSnapshotDto>.Failure("Unauthorized: only the room host can start the game.");
+            }
+
             if (room.Phase != RoomPhase.Lobby)
             {
                 return Result<RoomSnapshotDto>.Failure("Game has already started.");
@@ -150,6 +183,7 @@ public sealed class GameRoomService(
             }
 
             room.StartedAtUtc = DateTime.UtcNow;
+            room.LastActivityUtc = DateTime.UtcNow;
             StartQuestionLocked(room, 0);
             snapshot = room.BuildSnapshot();
             questionView = snapshot.ActiveQuestion!;
@@ -161,7 +195,55 @@ public sealed class GameRoomService(
         return Result<RoomSnapshotDto>.Success(snapshot);
     }
 
-    public async Task<Result<AnswerAckDto>> SubmitAnswerAsync(SubmitAnswerRequest request)
+    public async Task<Result<bool>> TogglePauseQuestionAsync(string roomCode, string callerConnectionId)
+    {
+        string code = roomCode.Trim().ToUpperInvariant();
+        if (!_rooms.TryGetValue(code, out var room))
+        {
+            return Result<bool>.Failure("Room not found.");
+        }
+
+        bool isPaused;
+        int remaining;
+        lock (room.SyncRoot)
+        {
+            if (room.HostConnectionId != callerConnectionId)
+            {
+                return Result<bool>.Failure("Unauthorized: only the room host can pause or resume.");
+            }
+
+            if (room.Phase != RoomPhase.QuestionActive)
+            {
+                return Result<bool>.Failure("Pause is only available during an active question.");
+            }
+
+            room.LastActivityUtc = DateTime.UtcNow;
+            if (!room.IsPaused)
+            {
+                room.IsPaused = true;
+                room.PausedAtUtc = DateTime.UtcNow;
+                room.RemainingSeconds = ComputeWallClockRemainingLocked(room);
+            }
+            else
+            {
+                if (room.PausedAtUtc.HasValue)
+                {
+                    room.TotalPausedDuration += DateTime.UtcNow - room.PausedAtUtc.Value;
+                    room.PausedAtUtc = null;
+                }
+                room.IsPaused = false;
+                room.RemainingSeconds = ComputeWallClockRemainingLocked(room);
+            }
+
+            isPaused = room.IsPaused;
+            remaining = room.RemainingSeconds;
+        }
+
+        await broadcaster.PauseStateChanged(code, isPaused, remaining);
+        return Result<bool>.Success(isPaused);
+    }
+
+    public async Task<Result<AnswerAckDto>> SubmitAnswerAsync(SubmitAnswerRequest request, string callerConnectionId)
     {
         string code = request.RoomCode.Trim().ToUpperInvariant();
         if (!_rooms.TryGetValue(code, out var room))
@@ -169,7 +251,21 @@ public sealed class GameRoomService(
             return Result<AnswerAckDto>.Failure("Room not found.");
         }
 
+        // Security: verify caller connection actually owns the PlayerId in this room.
+        if (!_connections.TryGetValue(callerConnectionId, out var connBinding) ||
+            !string.Equals(connBinding.RoomCode, code, StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<AnswerAckDto>.Failure("Unauthorized: connection is not a joined player in this room.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.PlayerId) && request.PlayerId != connBinding.PlayerId)
+        {
+            return Result<AnswerAckDto>.Failure("Unauthorized: cannot submit an answer on behalf of another player.");
+        }
+
+        string authenticPlayerId = connBinding.PlayerId;
         AnswerAckDto ack;
+        AnswerProgressDto progressDelta;
         bool shouldRevealImmediately = false;
 
         lock (room.SyncRoot)
@@ -179,7 +275,12 @@ public sealed class GameRoomService(
                 return Result<AnswerAckDto>.Failure("Question is no longer accepting answers.");
             }
 
-            if (!room.Players.TryGetValue(request.PlayerId, out var player))
+            if (room.IsPaused)
+            {
+                return Result<AnswerAckDto>.Failure("Question timer is currently paused by the host.");
+            }
+
+            if (!room.Players.TryGetValue(authenticPlayerId, out var player))
             {
                 return Result<AnswerAckDto>.Failure("Player is not registered in this room.");
             }
@@ -200,7 +301,7 @@ public sealed class GameRoomService(
                 return Result<AnswerAckDto>.Failure("Invalid option index.");
             }
 
-            double elapsedMs = (DateTime.UtcNow - room.QuestionStartedAtUtc).TotalMilliseconds;
+            double elapsedMs = Math.Max(0.0, (DateTime.UtcNow - room.QuestionStartedAtUtc - room.TotalPausedDuration).TotalMilliseconds);
             bool isCorrect = request.SelectedOptionIndex == question.CorrectOptionIndex;
 
             var breakdown = ScoreEngine.CalculateAnswerScore(
@@ -217,6 +318,8 @@ public sealed class GameRoomService(
                 isCorrect,
                 breakdown);
 
+            room.LastActivityUtc = DateTime.UtcNow;
+
             ack = new AnswerAckDto(
                 request.QuestionIndex,
                 request.SelectedOptionIndex,
@@ -225,6 +328,11 @@ public sealed class GameRoomService(
                 "Answer locked in on server.");
 
             var activePlayers = room.Players.Values.Where(p => p.IsConnected && !p.IsEliminated).ToList();
+            progressDelta = new AnswerProgressDto(
+                room.CurrentQuestionIndex,
+                room.CurrentQuestionSubmissions.Count,
+                activePlayers.Count);
+
             if (activePlayers.Count > 0 && activePlayers.All(p => room.CurrentQuestionSubmissions.ContainsKey(p.PlayerId)))
             {
                 shouldRevealImmediately = true;
@@ -233,22 +341,18 @@ public sealed class GameRoomService(
 
         if (shouldRevealImmediately)
         {
-            await RevealCurrentQuestionAsync(code);
+            await RevealCurrentQuestionInternalAsync(room);
         }
         else
         {
-            RoomSnapshotDto snap;
-            lock (room.SyncRoot)
-            {
-                snap = room.BuildSnapshot();
-            }
-            await broadcaster.RoomStateUpdated(code, snap);
+            // O(1) delta broadcast instead of re-sending full RoomSnapshotDto (avoids O(P^2) traffic).
+            await broadcaster.AnswerProgressUpdated(code, progressDelta);
         }
 
         return Result<AnswerAckDto>.Success(ack);
     }
 
-    public async Task<Result<QuestionRevealDto>> RevealCurrentQuestionAsync(string roomCode)
+    public async Task<Result<QuestionRevealDto>> RevealCurrentQuestionAsync(string roomCode, string callerConnectionId)
     {
         string code = roomCode.Trim().ToUpperInvariant();
         if (!_rooms.TryGetValue(code, out var room))
@@ -256,6 +360,19 @@ public sealed class GameRoomService(
             return Result<QuestionRevealDto>.Failure("Room not found.");
         }
 
+        lock (room.SyncRoot)
+        {
+            if (room.HostConnectionId != callerConnectionId)
+            {
+                return Result<QuestionRevealDto>.Failure("Unauthorized: only the room host can reveal answers.");
+            }
+        }
+
+        return await RevealCurrentQuestionInternalAsync(room);
+    }
+
+    private async Task<Result<QuestionRevealDto>> RevealCurrentQuestionInternalAsync(ActiveRoomState room)
+    {
         QuestionRevealDto? reveal;
         RoomSnapshotDto? snapshot;
         bool scheduleAutoAdvance = false;
@@ -276,8 +393,8 @@ public sealed class GameRoomService(
             scheduleAutoAdvance = room.AutoAdvance;
         }
 
-        await broadcaster.QuestionRevealed(code, reveal);
-        await broadcaster.RoomStateUpdated(code, snapshot);
+        await broadcaster.QuestionRevealed(room.RoomCode, reveal);
+        await broadcaster.RoomStateUpdated(room.RoomCode, snapshot);
 
         if (scheduleAutoAdvance)
         {
@@ -287,7 +404,7 @@ public sealed class GameRoomService(
         return Result<QuestionRevealDto>.Success(reveal);
     }
 
-    public async Task<Result<RoomSnapshotDto>> NextQuestionAsync(string roomCode)
+    public async Task<Result<RoomSnapshotDto>> NextQuestionAsync(string roomCode, string callerConnectionId)
     {
         string code = roomCode.Trim().ToUpperInvariant();
         if (!_rooms.TryGetValue(code, out var room))
@@ -295,14 +412,29 @@ public sealed class GameRoomService(
             return Result<RoomSnapshotDto>.Failure("Room not found.");
         }
 
+        lock (room.SyncRoot)
+        {
+            if (room.HostConnectionId != callerConnectionId)
+            {
+                return Result<RoomSnapshotDto>.Failure("Unauthorized: only the room host can advance questions.");
+            }
+        }
+
+        return await NextQuestionInternalAsync(room);
+    }
+
+    private async Task<Result<RoomSnapshotDto>> NextQuestionInternalAsync(ActiveRoomState room)
+    {
         RoomSnapshotDto snapshot;
         LiveQuestionViewDto? nextQuestion = null;
         int remaining = 0;
         SessionHistoryDto? completedSession = null;
+        List<(Guid QuestionId, string Prompt, int Attempts, int Correct)>? statsSnapshot = null;
 
         lock (room.SyncRoot)
         {
             room.StopTimers();
+            room.LastActivityUtc = DateTime.UtcNow;
 
             if (room.Phase == RoomPhase.PodiumFinished)
             {
@@ -323,6 +455,7 @@ public sealed class GameRoomService(
                 room.Phase = RoomPhase.PodiumFinished;
                 room.FinishedAtUtc = DateTime.UtcNow;
                 completedSession = BuildSessionSummaryLocked(room);
+                statsSnapshot = [.. room.QuestionStatsBuffer];
                 snapshot = room.BuildSnapshot();
             }
             else
@@ -336,20 +469,20 @@ public sealed class GameRoomService(
 
         if (completedSession is not null)
         {
-            await PersistSessionSafelyAsync(completedSession, room.Quiz.Id);
-            await broadcaster.GameEnded(code, completedSession);
-            await broadcaster.RoomStateUpdated(code, snapshot);
+            await PersistSessionSafelyAsync(completedSession, room.Quiz.Id, statsSnapshot);
+            await broadcaster.GameEnded(room.RoomCode, completedSession);
+            await broadcaster.RoomStateUpdated(room.RoomCode, snapshot);
         }
         else if (nextQuestion is not null)
         {
-            await broadcaster.QuestionStarted(code, nextQuestion, remaining);
-            await broadcaster.RoomStateUpdated(code, snapshot);
+            await broadcaster.QuestionStarted(room.RoomCode, nextQuestion, remaining);
+            await broadcaster.RoomStateUpdated(room.RoomCode, snapshot);
         }
 
         return Result<RoomSnapshotDto>.Success(snapshot);
     }
 
-    public async Task<Result<bool>> RemovePlayerAsync(string roomCode, string playerId)
+    public async Task<Result<bool>> RemovePlayerAsync(string roomCode, string playerId, string callerConnectionId)
     {
         string code = roomCode.Trim().ToUpperInvariant();
         if (!_rooms.TryGetValue(code, out var room))
@@ -361,12 +494,18 @@ public sealed class GameRoomService(
         RoomSnapshotDto snapshot;
         lock (room.SyncRoot)
         {
+            if (room.HostConnectionId != callerConnectionId)
+            {
+                return Result<bool>.Failure("Unauthorized: only the room host can remove players.");
+            }
+
             if (!room.Players.TryRemove(playerId, out removed))
             {
                 return Result<bool>.Failure("Player not found.");
             }
 
             room.CurrentQuestionSubmissions.Remove(playerId);
+            _connections.TryRemove(removed.ConnectionId, out _);
             snapshot = room.BuildSnapshot();
         }
 
@@ -377,6 +516,8 @@ public sealed class GameRoomService(
 
     public async Task HandleDisconnectAsync(string connectionId)
     {
+        _reactionCooldowns.TryRemove(connectionId, out _);
+
         if (!_connections.TryRemove(connectionId, out var mapping))
         {
             return;
@@ -429,14 +570,86 @@ public sealed class GameRoomService(
             .ToList();
     }
 
-    public async Task BroadcastReactionAsync(string roomCode, string nickname, string reactionKey)
+    public async Task BroadcastReactionAsync(string roomCode, string callerConnectionId, string reactionKey)
     {
         string code = roomCode.Trim().ToUpperInvariant();
-        if (_rooms.ContainsKey(code))
+        if (!_rooms.TryGetValue(code, out var room))
         {
-            var evt = new ReactionEventDto(code, nickname, reactionKey, DateTime.UtcNow);
-            await broadcaster.ReactionBroadcast(code, evt);
+            return;
         }
+
+        // Rate limit reactions to 1 per 1.5s per connection.
+        DateTime now = DateTime.UtcNow;
+        if (_reactionCooldowns.TryGetValue(callerConnectionId, out var lastSent) &&
+            (now - lastSent).TotalMilliseconds < 1500)
+        {
+            return;
+        }
+
+        string? senderNickname = null;
+        lock (room.SyncRoot)
+        {
+            if (room.HostConnectionId == callerConnectionId)
+            {
+                senderNickname = room.HostName;
+            }
+            else if (_connections.TryGetValue(callerConnectionId, out var binding) &&
+                     string.Equals(binding.RoomCode, code, StringComparison.OrdinalIgnoreCase) &&
+                     room.Players.TryGetValue(binding.PlayerId, out var player))
+            {
+                senderNickname = player.Nickname;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(senderNickname))
+        {
+            return;
+        }
+
+        _reactionCooldowns[callerConnectionId] = now;
+        string sanitizedKey = reactionKey.Trim();
+        if (sanitizedKey.Length > 24)
+        {
+            sanitizedKey = sanitizedKey[..24];
+        }
+
+        var evt = new ReactionEventDto(code, senderNickname, sanitizedKey, now);
+        await broadcaster.ReactionBroadcast(code, evt);
+    }
+
+    /// <summary>
+    /// Evicts finished (> 15 min) or abandoned (> 30 min) rooms and disposes their timers.
+    /// </summary>
+    public int CleanupExpiredRooms(TimeSpan? finishedTtl = null, TimeSpan? abandonedTtl = null)
+    {
+        DateTime now = DateTime.UtcNow;
+        TimeSpan finTtl = finishedTtl ?? TimeSpan.FromMinutes(15);
+        TimeSpan abnTtl = abandonedTtl ?? TimeSpan.FromMinutes(30);
+        int removedCount = 0;
+
+        foreach (var kvp in _rooms)
+        {
+            var room = kvp.Value;
+            bool shouldRemove;
+            lock (room.SyncRoot)
+            {
+                shouldRemove = room.Phase == RoomPhase.PodiumFinished
+                    ? (now - room.FinishedAtUtc) > finTtl
+                    : (now - room.LastActivityUtc) > abnTtl;
+            }
+
+            if (shouldRemove && _rooms.TryRemove(kvp.Key, out var evicted))
+            {
+                evicted.StopTimers();
+                foreach (var player in evicted.Players.Values)
+                {
+                    _connections.TryRemove(player.ConnectionId, out _);
+                }
+                removedCount++;
+            }
+        }
+
+        return removedCount;
     }
 
     private void StartQuestionLocked(ActiveRoomState room, int questionIndex)
@@ -444,6 +657,9 @@ public sealed class GameRoomService(
         room.StopTimers();
         room.CurrentQuestionIndex = questionIndex;
         room.Phase = RoomPhase.QuestionActive;
+        room.IsPaused = false;
+        room.PausedAtUtc = null;
+        room.TotalPausedDuration = TimeSpan.Zero;
         room.LastReveal = null;
         room.CurrentQuestionSubmissions.Clear();
 
@@ -456,7 +672,16 @@ public sealed class GameRoomService(
             p.LastDeltaScore = 0;
         }
 
-        room.QuestionTimer = new Timer(_ => _ = OnQuestionTimerTickAsync(room.RoomCode), null, 1000, 1000);
+        // Poll every 500ms against wall clock to avoid System.Threading.Timer drift.
+        room.QuestionTimer = new Timer(_ => _ = OnQuestionTimerTickAsync(room.RoomCode), null, 500, 500);
+    }
+
+    private static int ComputeWallClockRemainingLocked(ActiveRoomState room)
+    {
+        var q = room.Quiz.Questions[room.CurrentQuestionIndex];
+        DateTime effectiveNow = room.IsPaused && room.PausedAtUtc.HasValue ? room.PausedAtUtc.Value : DateTime.UtcNow;
+        double elapsedSeconds = (effectiveNow - room.QuestionStartedAtUtc - room.TotalPausedDuration).TotalSeconds;
+        return Math.Max(0, (int)Math.Ceiling(q.TimeLimitSeconds - elapsedSeconds));
     }
 
     private async Task OnQuestionTimerTickAsync(string roomCode)
@@ -467,6 +692,7 @@ public sealed class GameRoomService(
         }
 
         bool shouldReveal = false;
+        bool shouldEmitTick = false;
         int remaining;
 
         lock (room.SyncRoot)
@@ -477,7 +703,18 @@ public sealed class GameRoomService(
                 return;
             }
 
-            room.RemainingSeconds = Math.Max(0, room.RemainingSeconds - 1);
+            if (room.IsPaused)
+            {
+                return;
+            }
+
+            int computed = ComputeWallClockRemainingLocked(room);
+            if (computed != room.RemainingSeconds)
+            {
+                room.RemainingSeconds = computed;
+                shouldEmitTick = true;
+            }
+
             remaining = room.RemainingSeconds;
             if (remaining <= 0)
             {
@@ -487,10 +724,13 @@ public sealed class GameRoomService(
 
         try
         {
-            await broadcaster.TimerTicked(roomCode, remaining);
+            if (shouldEmitTick)
+            {
+                await broadcaster.TimerTicked(roomCode, remaining);
+            }
             if (shouldReveal)
             {
-                await RevealCurrentQuestionAsync(roomCode);
+                await RevealCurrentQuestionInternalAsync(room);
             }
         }
         catch (Exception ex)
@@ -510,9 +750,14 @@ public sealed class GameRoomService(
 
     private async Task SafeAutoAdvanceAsync(string roomCode)
     {
+        if (!_rooms.TryGetValue(roomCode, out var room))
+        {
+            return;
+        }
+
         try
         {
-            await NextQuestionAsync(roomCode);
+            await NextQuestionInternalAsync(room);
         }
         catch (Exception ex)
         {
@@ -524,10 +769,14 @@ public sealed class GameRoomService(
     {
         room.StopTimers();
         room.Phase = RoomPhase.QuestionReveal;
+        room.IsPaused = false;
+        room.PausedAtUtc = null;
 
         var question = room.Quiz.Questions[room.CurrentQuestionIndex];
         int[] voteCounts = new int[question.Options.Count];
         var newlyEliminated = new List<string>();
+        int attempts = 0;
+        int correctCount = 0;
 
         foreach (var player in room.Players.Values)
         {
@@ -538,12 +787,14 @@ public sealed class GameRoomService(
 
             if (room.CurrentQuestionSubmissions.TryGetValue(player.PlayerId, out var submission))
             {
+                attempts++;
                 voteCounts[submission.SelectedOptionIndex]++;
                 player.AnsweredCount++;
                 player.TotalResponseMs += submission.ElapsedMs;
 
                 if (submission.IsCorrect)
                 {
+                    correctCount++;
                     player.CorrectCount++;
                     player.CurrentStreak = submission.Breakdown.NewStreak;
                     player.BestStreak = Math.Max(player.BestStreak, player.CurrentStreak);
@@ -565,13 +816,16 @@ public sealed class GameRoomService(
             {
                 player.CurrentStreak = 0;
                 player.LastDeltaScore = 0;
-                if (room.Mode == GameMode.KnockoutElimination)
+                // Fair Knockout: only eliminate players who were connected and timed out, not dropped connections.
+                if (room.Mode == GameMode.KnockoutElimination && player.IsConnected)
                 {
                     player.IsEliminated = true;
                     newlyEliminated.Add(player.Nickname);
                 }
             }
         }
+
+        room.QuestionStatsBuffer.Add((question.Id, question.Prompt, attempts, correctCount));
 
         var standings = ScoreEngine.ComputeLeaderboard(room.Players.Values.Select(p => p.ToDto(0)));
         var teams = ScoreEngine.ComputeTeamStandings(standings);
@@ -629,13 +883,16 @@ public sealed class GameRoomService(
             playerResults);
     }
 
-    private async Task PersistSessionSafelyAsync(SessionHistoryDto summary, Guid quizId)
+    private async Task PersistSessionSafelyAsync(
+        SessionHistoryDto summary,
+        Guid quizId,
+        IReadOnlyList<(Guid QuestionId, string Prompt, int Attempts, int Correct)>? statsSnapshot)
     {
         try
         {
             using var scope = scopeFactory.CreateScope();
             var repo = scope.ServiceProvider.GetRequiredService<QuizRepositoryService>();
-            await repo.SaveCompletedSessionAsync(summary, quizId);
+            await repo.SaveCompletedSessionAsync(summary, quizId, statsSnapshot);
         }
         catch (Exception ex)
         {
@@ -651,7 +908,7 @@ public sealed class GameRoomService(
         {
             for (int i = 0; i < buffer.Length; i++)
             {
-                buffer[i] = chars[Random.Shared.Next(chars.Length)];
+                buffer[i] = chars[RandomNumberGenerator.GetInt32(chars.Length)];
             }
             string candidate = $"AQ{new string(buffer)}";
             if (!_rooms.ContainsKey(candidate))
@@ -718,7 +975,8 @@ public sealed class GameRoomService(
         string hostName,
         GameMode mode,
         bool autoAdvance,
-        string hostConnectionId)
+        string hostConnectionId,
+        string hostControlToken)
     {
         public object SyncRoot { get; } = new();
         public string RoomCode { get; } = roomCode;
@@ -726,16 +984,22 @@ public sealed class GameRoomService(
         public string HostName { get; } = hostName;
         public GameMode Mode { get; } = mode;
         public bool AutoAdvance { get; } = autoAdvance;
-        public string HostConnectionId { get; } = hostConnectionId;
+        public string HostConnectionId { get; set; } = hostConnectionId;
+        public string HostControlToken { get; } = hostControlToken;
         public RoomPhase Phase { get; set; } = RoomPhase.Lobby;
         public int CurrentQuestionIndex { get; set; } = -1;
         public int RemainingSeconds { get; set; }
+        public bool IsPaused { get; set; }
+        public DateTime? PausedAtUtc { get; set; }
+        public TimeSpan TotalPausedDuration { get; set; } = TimeSpan.Zero;
         public DateTime QuestionStartedAtUtc { get; set; }
         public DateTime StartedAtUtc { get; set; }
         public DateTime FinishedAtUtc { get; set; }
+        public DateTime LastActivityUtc { get; set; } = DateTime.UtcNow;
         public QuestionRevealDto? LastReveal { get; set; }
         public ConcurrentDictionary<string, PlayerState> Players { get; } = new();
         public Dictionary<string, PlayerSubmission> CurrentQuestionSubmissions { get; } = new();
+        public List<(Guid QuestionId, string Prompt, int Attempts, int Correct)> QuestionStatsBuffer { get; } = [];
         public Timer? QuestionTimer { get; set; }
         public Timer? AutoAdvanceTimer { get; set; }
 
@@ -747,7 +1011,7 @@ public sealed class GameRoomService(
             AutoAdvanceTimer = null;
         }
 
-        public RoomSnapshotDto BuildSnapshot(string? reconnectToken = null)
+        public RoomSnapshotDto BuildSnapshot(string? reconnectToken = null, string? hostControlToken = null)
         {
             var standings = ScoreEngine.ComputeLeaderboard(Players.Values.Select(p => p.ToDto(0)));
             var teams = ScoreEngine.ComputeTeamStandings(standings);
@@ -768,6 +1032,8 @@ public sealed class GameRoomService(
                     Mode);
             }
 
+            int activeCount = Players.Values.Count(p => p.IsConnected && !p.IsEliminated);
+
             return new RoomSnapshotDto(
                 RoomCode,
                 Quiz.Title,
@@ -782,8 +1048,11 @@ public sealed class GameRoomService(
                 teams,
                 activeQuestion,
                 LastReveal,
-                reconnectToken);
+                reconnectToken,
+                IsPaused,
+                CurrentQuestionSubmissions.Count,
+                activeCount,
+                hostControlToken);
         }
     }
 }
-

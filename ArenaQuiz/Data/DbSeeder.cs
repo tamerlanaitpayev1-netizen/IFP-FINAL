@@ -1,6 +1,5 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
+using ArenaQuiz.Security;
 using ArenaQuiz.Shared.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,12 +7,6 @@ namespace ArenaQuiz.Data;
 
 public static class DbSeeder
 {
-    public static string HashPassword(string raw)
-    {
-        byte[] bytes = SHA256.HashData(Encoding.UTF8.GetBytes($"ArenaQuizSalt::{raw}"));
-        return Convert.ToHexString(bytes);
-    }
-
     public static async Task SeedAsync(ArenaDbContext db)
     {
         await db.Database.EnsureCreatedAsync();
@@ -25,21 +18,21 @@ public static class DbSeeder
                 {
                     Username = "tamerlan",
                     FullName = "Тамерлан (Host)",
-                    PasswordHash = HashPassword("host123"),
+                    PasswordHash = TokenService.HashPassword("host123"),
                     Role = UserRole.Host
                 },
                 new UserAccountEntity
                 {
                     Username = "dias",
                     FullName = "Диас (Host)",
-                    PasswordHash = HashPassword("host123"),
+                    PasswordHash = TokenService.HashPassword("host123"),
                     Role = UserRole.Host
                 },
                 new UserAccountEntity
                 {
                     Username = "student",
                     FullName = "Игрок АИТУ",
-                    PasswordHash = HashPassword("play123"),
+                    PasswordHash = TokenService.HashPassword("play123"),
                     Role = UserRole.Player
                 });
             await db.SaveChangesAsync();
@@ -186,6 +179,25 @@ public static class DbSeeder
 
         db.Quizzes.AddRange(quizzes);
 
+        var stats = new List<QuestionStatEntity>();
+        foreach (var quiz in quizzes)
+        {
+            foreach (var q in quiz.Questions)
+            {
+                int attempts = 16;
+                int correct = q.OrderIndex switch { 0 => 14, 1 => 12, 2 => 11, 3 => 9, _ => 10 };
+                stats.Add(new QuestionStatEntity
+                {
+                    QuestionId = q.Id,
+                    QuizTitle = quiz.Title,
+                    Prompt = q.Prompt,
+                    TotalAttempts = attempts,
+                    CorrectAttempts = correct
+                });
+            }
+        }
+        db.QuestionStats.AddRange(stats);
+
         var seededSessions = new List<GameSessionEntity>
         {
             BuildSeededSession("AQ1024", quiz1Id, quizzes[0].Title, "Тамерлан (Host)", GameMode.ClassicSpeed, -48,
@@ -284,4 +296,3 @@ public static class DbSeeder
         };
     }
 }
-

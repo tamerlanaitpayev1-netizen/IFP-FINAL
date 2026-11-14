@@ -6,27 +6,56 @@ using Microsoft.EntityFrameworkCore;
 namespace ArenaQuiz.Services;
 
 /// <summary>
-/// Data access service for quizzes, historical sessions, and aggregate analytics stored in SQLite.
+/// Data access service for quizzes, historical sessions, question difficulty metrics, and SQLite persistence.
 /// </summary>
 public sealed class QuizRepositoryService(ArenaDbContext db)
 {
     public async Task<IReadOnlyList<QuizSummaryDto>> GetAllQuizSummariesAsync(CancellationToken ct = default)
     {
-        var quizzes = await db.Quizzes
+        // SQL projection avoids loading all question payloads and options JSON into server RAM.
+        return await db.Quizzes
             .AsNoTracking()
-            .Include(q => q.Questions)
             .OrderByDescending(q => q.CreatedAtUtc)
+            .Select(q => new QuizSummaryDto(
+                q.Id,
+                q.Title,
+                q.Category,
+                q.Description,
+                q.Questions.Count,
+                q.Questions.Count > 0 ? (int)Math.Round(q.Questions.Average(qn => qn.TimeLimitSeconds)) : 20,
+                q.CreatedBy,
+                q.CreatedAtUtc))
             .ToListAsync(ct);
+    }
 
-        return quizzes.Select(q => new QuizSummaryDto(
-            q.Id,
-            q.Title,
-            q.Category,
-            q.Description,
-            q.Questions.Count,
-            q.Questions.Count > 0 ? (int)Math.Round(q.Questions.Average(qn => qn.TimeLimitSeconds)) : 20,
-            q.CreatedBy,
-            q.CreatedAtUtc)).ToList();
+    /// <summary>
+    /// Public preview projection omitting CorrectOptionIndex and Explanation to prevent answer leaks.
+    /// </summary>
+    public async Task<QuizPublicPreviewDto?> GetQuizPublicPreviewAsync(Guid quizId, CancellationToken ct = default)
+    {
+        var quiz = await db.Quizzes
+            .AsNoTracking()
+            .Include(q => q.Questions.OrderBy(qn => qn.OrderIndex))
+            .FirstOrDefaultAsync(q => q.Id == quizId, ct);
+
+        if (quiz is null)
+        {
+            return null;
+        }
+
+        var questions = quiz.Questions
+            .OrderBy(q => q.OrderIndex)
+            .Select(q => new QuestionPublicDto(
+                q.Id,
+                q.OrderIndex,
+                q.Prompt,
+                q.CodeSnippet,
+                DeserializeOptions(q.OptionsJson),
+                q.TimeLimitSeconds,
+                q.BasePoints))
+            .ToList();
+
+        return new QuizPublicPreviewDto(quiz.Id, quiz.Title, quiz.Category, quiz.Description, quiz.CreatedBy, questions);
     }
 
     public async Task<QuizDetailDto?> GetQuizDetailAsync(Guid quizId, CancellationToken ct = default)
@@ -60,31 +89,10 @@ public sealed class QuizRepositoryService(ArenaDbContext db)
 
     public async Task<Result<QuizSummaryDto>> CreateQuizAsync(CreateQuizRequest request, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(request.Title))
+        var validationError = ValidateQuizRequest(request);
+        if (validationError is not null)
         {
-            return Result<QuizSummaryDto>.Failure("Quiz title is required.");
-        }
-
-        if (request.Questions is null || request.Questions.Count == 0)
-        {
-            return Result<QuizSummaryDto>.Failure("Add at least one question.");
-        }
-
-        for (int i = 0; i < request.Questions.Count; i++)
-        {
-            var q = request.Questions[i];
-            if (string.IsNullOrWhiteSpace(q.Prompt))
-            {
-                return Result<QuizSummaryDto>.Failure($"Question #{i + 1} prompt cannot be empty.");
-            }
-            if (q.Options.Count < 2 || q.Options.Any(string.IsNullOrWhiteSpace))
-            {
-                return Result<QuizSummaryDto>.Failure($"Question #{i + 1} must have non-empty answer options.");
-            }
-            if (q.CorrectOptionIndex < 0 || q.CorrectOptionIndex >= q.Options.Count)
-            {
-                return Result<QuizSummaryDto>.Failure($"Question #{i + 1} has an invalid correct answer index.");
-            }
+            return Result<QuizSummaryDto>.Failure(validationError);
         }
 
         var quizId = Guid.NewGuid();
@@ -96,33 +104,43 @@ public sealed class QuizRepositoryService(ArenaDbContext db)
             Description = request.Description?.Trim() ?? string.Empty,
             CreatedBy = string.IsNullOrWhiteSpace(request.CreatedBy) ? "Host" : request.CreatedBy.Trim(),
             CreatedAtUtc = DateTime.UtcNow,
-            Questions = request.Questions.Select((q, idx) => new QuestionEntity
-            {
-                Id = Guid.NewGuid(),
-                QuizId = quizId,
-                OrderIndex = idx,
-                Prompt = q.Prompt.Trim(),
-                CodeSnippet = string.IsNullOrWhiteSpace(q.CodeSnippet) ? null : q.CodeSnippet.Trim(),
-                OptionsJson = JsonSerializer.Serialize(q.Options.Select(o => o.Trim()).ToArray()),
-                CorrectOptionIndex = q.CorrectOptionIndex,
-                TimeLimitSeconds = Math.Clamp(q.TimeLimitSeconds, 5, 120),
-                BasePoints = Math.Clamp(q.BasePoints, 100, 5000),
-                Explanation = q.Explanation?.Trim() ?? string.Empty
-            }).ToList()
+            Questions = BuildQuestionEntities(quizId, request.Questions)
         };
 
         db.Quizzes.Add(entity);
         await db.SaveChangesAsync(ct);
 
-        return Result<QuizSummaryDto>.Success(new QuizSummaryDto(
-            entity.Id,
-            entity.Title,
-            entity.Category,
-            entity.Description,
-            entity.Questions.Count,
-            (int)Math.Round(entity.Questions.Average(qn => qn.TimeLimitSeconds)),
-            entity.CreatedBy,
-            entity.CreatedAtUtc));
+        return Result<QuizSummaryDto>.Success(ToSummary(entity));
+    }
+
+    public async Task<Result<QuizSummaryDto>> UpdateQuizAsync(Guid quizId, CreateQuizRequest request, CancellationToken ct = default)
+    {
+        var validationError = ValidateQuizRequest(request);
+        if (validationError is not null)
+        {
+            return Result<QuizSummaryDto>.Failure(validationError);
+        }
+
+        var quiz = await db.Quizzes
+            .Include(q => q.Questions)
+            .FirstOrDefaultAsync(q => q.Id == quizId, ct);
+
+        if (quiz is null)
+        {
+            return Result<QuizSummaryDto>.Failure("Quiz not found.");
+        }
+
+        quiz.Title = request.Title.Trim();
+        quiz.Category = string.IsNullOrWhiteSpace(request.Category) ? "General" : request.Category.Trim();
+        quiz.Description = request.Description?.Trim() ?? string.Empty;
+
+        db.Questions.RemoveRange(quiz.Questions);
+        var updatedQuestions = BuildQuestionEntities(quiz.Id, request.Questions);
+        db.Questions.AddRange(updatedQuestions);
+        quiz.Questions = updatedQuestions;
+
+        await db.SaveChangesAsync(ct);
+        return Result<QuizSummaryDto>.Success(ToSummary(quiz));
     }
 
     public async Task<bool> DeleteQuizAsync(Guid quizId, CancellationToken ct = default)
@@ -138,7 +156,11 @@ public sealed class QuizRepositoryService(ArenaDbContext db)
         return true;
     }
 
-    public async Task SaveCompletedSessionAsync(SessionHistoryDto summary, Guid quizId, CancellationToken ct = default)
+    public async Task SaveCompletedSessionAsync(
+        SessionHistoryDto summary,
+        Guid quizId,
+        IReadOnlyList<(Guid QuestionId, string Prompt, int Attempts, int Correct)>? questionBreakdown = null,
+        CancellationToken ct = default)
     {
         var entity = new GameSessionEntity
         {
@@ -167,6 +189,31 @@ public sealed class QuizRepositoryService(ArenaDbContext db)
         };
 
         db.GameSessions.Add(entity);
+
+        if (questionBreakdown is { Count: > 0 })
+        {
+            foreach (var item in questionBreakdown.Where(x => x.Attempts > 0))
+            {
+                var existing = await db.QuestionStats.FirstOrDefaultAsync(s => s.QuestionId == item.QuestionId, ct);
+                if (existing is null)
+                {
+                    db.QuestionStats.Add(new QuestionStatEntity
+                    {
+                        QuestionId = item.QuestionId,
+                        QuizTitle = summary.QuizTitle,
+                        Prompt = item.Prompt,
+                        TotalAttempts = item.Attempts,
+                        CorrectAttempts = item.Correct
+                    });
+                }
+                else
+                {
+                    existing.TotalAttempts += item.Attempts;
+                    existing.CorrectAttempts += item.Correct;
+                }
+            }
+        }
+
         await db.SaveChangesAsync(ct);
     }
 
@@ -191,12 +238,26 @@ public sealed class QuizRepositoryService(ArenaDbContext db)
             .Select(g => g.Key)
             .FirstOrDefault() ?? "N/A";
 
+        var questionStats = await db.QuestionStats
+            .AsNoTracking()
+            .Where(s => s.TotalAttempts > 0)
+            .OrderBy(s => (double)s.CorrectAttempts / s.TotalAttempts)
+            .Take(10)
+            .Select(s => new QuestionDifficultyDto(
+                s.QuizTitle,
+                s.Prompt,
+                s.TotalAttempts,
+                s.CorrectAttempts,
+                Math.Round(s.CorrectAttempts * 100.0 / s.TotalAttempts, 1)))
+            .ToListAsync(ct);
+
         return new AnalyticsOverviewDto(
             sessionDtos.Count,
             totalParticipants,
             globalAccuracy,
             popularQuiz,
-            sessionDtos);
+            sessionDtos,
+            questionStats);
     }
 
     public async Task<SessionHistoryDto?> GetSessionByIdAsync(Guid sessionId, CancellationToken ct = default)
@@ -208,6 +269,65 @@ public sealed class QuizRepositoryService(ArenaDbContext db)
 
         return session is null ? null : MapSession(session);
     }
+
+    private static string? ValidateQuizRequest(CreateQuizRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Title))
+        {
+            return "Quiz title is required.";
+        }
+
+        if (request.Questions is null || request.Questions.Count == 0)
+        {
+            return "Add at least one question.";
+        }
+
+        for (int i = 0; i < request.Questions.Count; i++)
+        {
+            var q = request.Questions[i];
+            if (string.IsNullOrWhiteSpace(q.Prompt))
+            {
+                return $"Question #{i + 1} prompt cannot be empty.";
+            }
+            if (q.Options.Count < 2 || q.Options.Any(string.IsNullOrWhiteSpace))
+            {
+                return $"Question #{i + 1} must have non-empty answer options.";
+            }
+            if (q.CorrectOptionIndex < 0 || q.CorrectOptionIndex >= q.Options.Count)
+            {
+                return $"Question #{i + 1} has an invalid correct answer index.";
+            }
+        }
+
+        return null;
+    }
+
+    private static List<QuestionEntity> BuildQuestionEntities(Guid quizId, List<CreateQuestionRequest> questions)
+    {
+        return questions.Select((q, idx) => new QuestionEntity
+        {
+            Id = Guid.NewGuid(),
+            QuizId = quizId,
+            OrderIndex = idx,
+            Prompt = q.Prompt.Trim(),
+            CodeSnippet = string.IsNullOrWhiteSpace(q.CodeSnippet) ? null : q.CodeSnippet.Trim(),
+            OptionsJson = JsonSerializer.Serialize(q.Options.Select(o => o.Trim()).ToArray()),
+            CorrectOptionIndex = q.CorrectOptionIndex,
+            TimeLimitSeconds = Math.Clamp(q.TimeLimitSeconds, 5, 120),
+            BasePoints = Math.Clamp(q.BasePoints, 100, 5000),
+            Explanation = q.Explanation?.Trim() ?? string.Empty
+        }).ToList();
+    }
+
+    private static QuizSummaryDto ToSummary(QuizEntity entity) => new(
+        entity.Id,
+        entity.Title,
+        entity.Category,
+        entity.Description,
+        entity.Questions.Count,
+        entity.Questions.Count > 0 ? (int)Math.Round(entity.Questions.Average(qn => qn.TimeLimitSeconds)) : 20,
+        entity.CreatedBy,
+        entity.CreatedAtUtc);
 
     private static SessionHistoryDto MapSession(GameSessionEntity s)
     {
@@ -257,4 +377,3 @@ public sealed class QuizRepositoryService(ArenaDbContext db)
         }
     }
 }
-

@@ -17,13 +17,15 @@ public sealed class AuthController(AuthService authService) : ControllerBase
             : Unauthorized(new { error = result.Error });
     }
 
+    /// <summary>
+    /// Passwordless switch is strictly limited to Player accounts; Host elevation requires Login.
+    /// </summary>
     [HttpPost("quick-switch")]
     public async Task<ActionResult<UserSessionDto>> QuickSwitch([FromBody] QuickSwitchRoleRequest request, CancellationToken ct)
     {
-        var result = await authService.QuickSwitchAsync(request.Username, ct);
+        var result = await authService.QuickSwitchPlayerAsync(request.Username, ct);
         return result.IsSuccess && result.Value is not null
             ? Ok(result.Value)
-            : NotFound(new { error = result.Error });
+            : BadRequest(new { error = result.Error });
     }
 }
-

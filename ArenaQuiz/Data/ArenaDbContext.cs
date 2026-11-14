@@ -8,6 +8,7 @@ public sealed class ArenaDbContext(DbContextOptions<ArenaDbContext> options) : D
     public DbSet<QuestionEntity> Questions => Set<QuestionEntity>();
     public DbSet<GameSessionEntity> GameSessions => Set<GameSessionEntity>();
     public DbSet<PlayerResultEntity> PlayerResults => Set<PlayerResultEntity>();
+    public DbSet<QuestionStatEntity> QuestionStats => Set<QuestionStatEntity>();
     public DbSet<UserAccountEntity> Users => Set<UserAccountEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -49,6 +50,12 @@ public sealed class ArenaDbContext(DbContextOptions<ArenaDbContext> options) : D
             entity.Property(r => r.Nickname).HasMaxLength(60).IsRequired();
         });
 
+        modelBuilder.Entity<QuestionStatEntity>(entity =>
+        {
+            entity.HasKey(q => q.Id);
+            entity.HasIndex(q => q.QuestionId).IsUnique();
+        });
+
         modelBuilder.Entity<UserAccountEntity>(entity =>
         {
             entity.HasKey(u => u.Id);
@@ -56,4 +63,3 @@ public sealed class ArenaDbContext(DbContextOptions<ArenaDbContext> options) : D
         });
     }
 }
-

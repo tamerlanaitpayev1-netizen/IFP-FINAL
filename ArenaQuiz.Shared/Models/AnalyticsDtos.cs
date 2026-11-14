@@ -25,20 +25,28 @@ public sealed record PlayerResultDto(
     double AverageResponseMs,
     bool WasEliminated);
 
+public sealed record QuestionDifficultyDto(
+    string QuizTitle,
+    string Prompt,
+    int TotalAttempts,
+    int CorrectAttempts,
+    double AccuracyPercent);
+
 public sealed record AnalyticsOverviewDto(
     int TotalSessionsPlayed,
     int TotalParticipants,
     double GlobalAccuracyPercent,
     string MostPopularQuiz,
-    IReadOnlyList<SessionHistoryDto> RecentSessions);
+    IReadOnlyList<SessionHistoryDto> RecentSessions,
+    IReadOnlyList<QuestionDifficultyDto>? QuestionStats = null);
 
 public sealed record UserSessionDto(
     string Username,
     string FullName,
     UserRole Role,
-    string Token);
+    string Token,
+    DateTime? ExpiresAtUtc = null);
 
 public sealed record LoginRequest(string Username, string Password);
 
 public sealed record QuickSwitchRoleRequest(string Username);
-

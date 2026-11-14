@@ -1,6 +1,6 @@
 # .NET / Visual Studio / Rider / VS Code
-bin/
-obj/
+[Bb]in/
+[Oo]bj/
 .vs/
 .vscode/
 .idea/
@@ -13,14 +13,29 @@ obj/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
 
-# Test & publish artifacts
-TestResults/
+# Test, coverage & publish artifacts
+[Tt]est[Rr]esults/
 publish/
 *.trx
 *.coverage
-*.zip
-.DS_Store
+coverage*.xml
+coverage*.json
 
-repomix-output
-repomix-output.xml
+# Archives, dumps & OS metadata
+*.zip
+*.7z
+*.tar.gz
+*.tmp
+*.bak
+*.log
+.DS_Store
+Thumbs.db
+repomix-output*
+
+# Local defense cheat sheets & git workflow notes (kept on disk, excluded from repo)
+docs/TEAM_GIT_WORKFLOW.md
+docs/DEFENSE_QA_GUIDE.md
+docs/PRESENTATION_SLIDES.md

@@ -16,6 +16,8 @@ public interface IGameRoomBroadcaster
     Task PlayerLeft(string roomCode, string playerId, string nickname);
     Task QuestionStarted(string roomCode, LiveQuestionViewDto question, int remainingSeconds);
     Task TimerTicked(string roomCode, int remainingSeconds);
+    Task AnswerProgressUpdated(string roomCode, AnswerProgressDto progress);
+    Task PauseStateChanged(string roomCode, bool isPaused, int remainingSeconds);
     Task QuestionRevealed(string roomCode, QuestionRevealDto reveal);
     Task GameEnded(string roomCode, SessionHistoryDto summary);
     Task ReactionBroadcast(string roomCode, ReactionEventDto reaction);
@@ -41,6 +43,12 @@ public sealed class SignalRGameRoomBroadcaster(IHubContext<GameHub, IGameHubClie
     public Task TimerTicked(string roomCode, int remainingSeconds) =>
         hubContext.Clients.Group(roomCode).TimerTicked(remainingSeconds);
 
+    public Task AnswerProgressUpdated(string roomCode, AnswerProgressDto progress) =>
+        hubContext.Clients.Group(roomCode).AnswerProgressUpdated(progress);
+
+    public Task PauseStateChanged(string roomCode, bool isPaused, int remainingSeconds) =>
+        hubContext.Clients.Group(roomCode).PauseStateChanged(isPaused, remainingSeconds);
+
     public Task QuestionRevealed(string roomCode, QuestionRevealDto reveal) =>
         hubContext.Clients.Group(roomCode).QuestionRevealed(reveal);
 
@@ -50,4 +58,3 @@ public sealed class SignalRGameRoomBroadcaster(IHubContext<GameHub, IGameHubClie
     public Task ReactionBroadcast(string roomCode, ReactionEventDto reaction) =>
         hubContext.Clients.Group(roomCode).ReactionBroadcast(reaction);
 }
-

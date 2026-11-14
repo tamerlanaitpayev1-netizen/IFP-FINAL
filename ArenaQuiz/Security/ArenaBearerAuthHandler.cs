@@ -1,0 +1,41 @@
+using System.Text.Encodings.Web;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Options;
+
+namespace ArenaQuiz.Security;
+
+/// <summary>
+/// ASP.NET Core authentication handler validating HMAC-SHA256 ArenaBearer tokens from the Authorization header.
+/// </summary>
+public sealed class ArenaBearerAuthHandler(
+    IOptionsMonitor<AuthenticationSchemeOptions> options,
+    ILoggerFactory logger,
+    UrlEncoder encoder,
+    TokenService tokenService) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+{
+    public const string SchemeName = "ArenaBearer";
+
+    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+    {
+        if (!Request.Headers.TryGetValue("Authorization", out var headerValues))
+        {
+            return Task.FromResult(AuthenticateResult.NoResult());
+        }
+
+        string header = headerValues.ToString();
+        if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult(AuthenticateResult.NoResult());
+        }
+
+        string token = header["Bearer ".Length..].Trim();
+        var principal = tokenService.ValidateToken(token);
+        if (principal is null)
+        {
+            return Task.FromResult(AuthenticateResult.Fail("Invalid or expired ArenaQuiz bearer token."));
+        }
+
+        var ticket = new AuthenticationTicket(principal, SchemeName);
+        return Task.FromResult(AuthenticateResult.Success(ticket));
+    }
+}

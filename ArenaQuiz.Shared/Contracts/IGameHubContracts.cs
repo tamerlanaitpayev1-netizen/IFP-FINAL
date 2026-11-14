@@ -13,6 +13,8 @@ public interface IGameHubClient
     Task PlayerLeft(string playerId, string nickname);
     Task QuestionStarted(LiveQuestionViewDto question, int remainingSeconds);
     Task TimerTicked(int remainingSeconds);
+    Task AnswerProgressUpdated(AnswerProgressDto progress);
+    Task PauseStateChanged(bool isPaused, int remainingSeconds);
     Task AnswerSubmittedAck(AnswerAckDto ack);
     Task QuestionRevealed(QuestionRevealDto reveal);
     Task GameEnded(SessionHistoryDto summary);
@@ -26,8 +28,10 @@ public interface IGameHubClient
 public interface IGameHubServer
 {
     Task<Result<RoomSnapshotDto>> CreateRoom(CreateRoomRequest request);
+    Task<Result<RoomSnapshotDto>> ReclaimHost(string roomCode, string hostControlToken);
     Task<Result<RoomSnapshotDto>> JoinRoom(JoinRoomRequest request);
     Task<Result<RoomSnapshotDto>> StartGame(string roomCode);
+    Task<Result<bool>> TogglePauseQuestion(string roomCode);
     Task<Result<AnswerAckDto>> SubmitAnswer(SubmitAnswerRequest request);
     Task<Result<QuestionRevealDto>> RevealCurrentQuestion(string roomCode);
     Task<Result<RoomSnapshotDto>> NextQuestion(string roomCode);
@@ -35,4 +39,3 @@ public interface IGameHubServer
     Task SendReaction(string roomCode, string nickname, string reactionKey);
     Task<IReadOnlyList<OpenRoomSummaryDto>> GetOpenRooms();
 }
-
