@@ -1,3 +1,6 @@
+@implements IDisposable
+@inject IServiceProvider Services
+
 <div class="aq-timer-pill @(IsPaused ? "is-paused" : IsUrgent ? "is-urgent" : string.Empty)">
     <svg width="28" height="28" viewBox="0 0 36 36" aria-hidden="true">
         <circle cx="18" cy="18" r="15" fill="none" stroke="var(--border-subtle)" stroke-width="3.5" />
@@ -10,12 +13,14 @@
                 transform="rotate(-90 18 18)" />
     </svg>
     <div>
-        <div class="aq-timer-label">@(IsPaused ? "Paused" : "Timer")</div>
+        <div class="aq-timer-label">@(IsPaused ? T("comp.paused", "Paused") : T("comp.timer", "Timer"))</div>
         <div class="aq-timer-value tabular">@RemainingSeconds s</div>
     </div>
 </div>
 
 @code {
+    private LocalizationService? _loc;
+
     [Parameter]
     public int RemainingSeconds { get; set; }
 
@@ -30,7 +35,28 @@
 
     private int _lastFiredForZero = -1;
 
-    private bool IsUrgent => RemainingSeconds <= 5;
+    private bool IsUrgent => RemainingSeconds <= 5 && RemainingSeconds > 0;
+
+    protected override void OnInitialized()
+    {
+        _loc = Services.GetService(typeof(LocalizationService)) as LocalizationService;
+        if (_loc is not null)
+        {
+            _loc.OnLanguageChanged += HandleLanguageChanged;
+        }
+    }
+
+    private void HandleLanguageChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private string T(string key, string fallback) => _loc is not null ? _loc.T(key) : fallback;
+
+    public void Dispose()
+    {
+        if (_loc is not null)
+        {
+            _loc.OnLanguageChanged -= HandleLanguageChanged;
+        }
+    }
 
     private double DashOffset
     {

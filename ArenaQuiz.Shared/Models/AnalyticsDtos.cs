@@ -49,4 +49,10 @@ public sealed record UserSessionDto(
 
 public sealed record LoginRequest(string Username, string Password);
 
+public sealed record RegisterRequest(
+    string Username,
+    string FullName,
+    string Password,
+    UserRole Role = UserRole.Player);
+
 public sealed record QuickSwitchRoleRequest(string Username);

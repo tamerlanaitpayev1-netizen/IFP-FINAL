@@ -1,13 +1,15 @@
 @using Microsoft.AspNetCore.SignalR.Client
+@implements IDisposable
+@inject IServiceProvider Services
 
 @if (GameState is not null && !string.IsNullOrWhiteSpace(GameState.LastError))
 {
     <div class="aq-alert aq-alert-crimson aq-mb-md">
         <div>
-            <strong>Notice:</strong> @GameState.LastError
+            <strong>@T("comp.notice", "Notice"):</strong> @GameState.LastError
         </div>
         <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => GameState.ClearError()">
-            Dismiss
+            @T("comp.dismiss", "Dismiss")
         </button>
     </div>
 }
@@ -16,12 +18,44 @@
 {
     <div class="aq-alert aq-alert-amber aq-mb-md">
         <div>
-            <strong>Reconnecting...</strong> Restoring live connection automatically.
+            <strong>@T("comp.reconnecting", "Reconnecting...")</strong> @T("comp.reconnecting_desc", "Restoring live connection automatically.")
+        </div>
+    </div>
+}
+
+@if (GameState?.CurrentRoom is { IsHostConnected: false, Phase: not RoomPhase.PodiumFinished })
+{
+    <div class="aq-alert aq-alert-amber aq-mb-md">
+        <div>
+            <strong>@T("comp.host_reconnecting", "Host is reconnecting...")</strong> @T("comp.host_reconnecting_desc", "Waiting for the host to return to the room.")
         </div>
     </div>
 }
 
 @code {
+    private LocalizationService? _loc;
+
     [CascadingParameter]
     public GameStateContainer? GameState { get; set; }
+
+    protected override void OnInitialized()
+    {
+        _loc = Services.GetService(typeof(LocalizationService)) as LocalizationService;
+        if (_loc is not null)
+        {
+            _loc.OnLanguageChanged += HandleLanguageChanged;
+        }
+    }
+
+    private void HandleLanguageChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private string T(string key, string fallback) => _loc is not null ? _loc.T(key) : fallback;
+
+    public void Dispose()
+    {
+        if (_loc is not null)
+        {
+            _loc.OnLanguageChanged -= HandleLanguageChanged;
+        }
+    }
 }

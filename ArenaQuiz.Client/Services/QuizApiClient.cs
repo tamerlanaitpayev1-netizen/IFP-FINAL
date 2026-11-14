@@ -163,5 +163,56 @@ public sealed class QuizApiClient(HttpClient http)
         }
     }
 
+    public async Task<Result<UserSessionDto>> RegisterAsync(RegisterRequest request)
+    {
+        try
+        {
+            var response = await http.PostAsJsonAsync("api/auth/register", request);
+            if (response.IsSuccessStatusCode)
+            {
+                var session = await response.Content.ReadFromJsonAsync<UserSessionDto>();
+                if (session is not null)
+                {
+                    SetBearerToken(session.Token);
+                    return Result<UserSessionDto>.Success(session);
+                }
+                return Result<UserSessionDto>.Failure("Invalid session payload.");
+            }
+
+            var err = await response.Content.ReadFromJsonAsync<ApiErrorPayload>();
+            return Result<UserSessionDto>.Failure(err?.Error ?? "Registration failed.");
+        }
+        catch (Exception ex)
+        {
+            return Result<UserSessionDto>.Failure($"Network error: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<CreateQuizRequest>> GenerateAiQuizAsync(GenerateAiQuizRequest request)
+    {
+        try
+        {
+            var response = await http.PostAsJsonAsync("api/quizzes/generate-ai", request);
+            if (response.IsSuccessStatusCode)
+            {
+                var draft = await response.Content.ReadFromJsonAsync<CreateQuizRequest>();
+                return draft is not null
+                    ? Result<CreateQuizRequest>.Success(draft)
+                    : Result<CreateQuizRequest>.Failure("Empty generator payload.");
+            }
+
+            if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+            {
+                return Result<CreateQuizRequest>.Failure("Host sign-in required to generate quizzes.");
+            }
+
+            return Result<CreateQuizRequest>.Failure($"Generator returned {(int)response.StatusCode}.");
+        }
+        catch (Exception ex)
+        {
+            return Result<CreateQuizRequest>.Failure($"Network error: {ex.Message}");
+        }
+    }
+
     private sealed record ApiErrorPayload(string? Error);
 }

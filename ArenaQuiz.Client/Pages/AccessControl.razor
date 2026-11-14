@@ -100,11 +100,43 @@
             </div>
         </div>
     </div>
+
+    <div class="aq-card aq-stack-md aq-enter">
+        <div>
+            <h2 class="aq-heading-md">Register New Player Account</h2>
+            <p class="aq-text-xs">Self-service account creation issues a signed Player token (PBKDF2 salted hash). Elevated Host/Admin roles require server provisioning.</p>
+        </div>
+
+        <div class="aq-grid-3">
+            <div>
+                <label class="aq-label" for="reg-user">New Username</label>
+                <input id="reg-user" class="aq-input" @bind="_regUsername" placeholder="e.g., aruzhan99" autocomplete="username" />
+            </div>
+            <div>
+                <label class="aq-label" for="reg-fullname">Display Name</label>
+                <input id="reg-fullname" class="aq-input" @bind="_regFullName" placeholder="e.g., Aruzhan S." />
+            </div>
+            <div>
+                <label class="aq-label" for="reg-pass">Password (min 6 chars)</label>
+                <input id="reg-pass" type="password" class="aq-input" @bind="_regPassword" placeholder="Minimum 6 characters" autocomplete="new-password" />
+            </div>
+        </div>
+
+        <div class="aq-row-between">
+            <span class="aq-text-xs">Accounts created here always start with <strong>Player</strong> permissions.</span>
+            <button type="button" class="aq-btn aq-btn-dark" disabled="@_busy" @onclick="RegisterPlayerAsync">
+                @(_busy ? "Creating Account..." : "Register & Sign In")
+            </button>
+        </div>
+    </div>
 </section>
 
 @code {
     private string _username = string.Empty;
     private string _password = string.Empty;
+    private string _regUsername = string.Empty;
+    private string _regFullName = string.Empty;
+    private string _regPassword = string.Empty;
     private bool _busy;
     private string? _statusMessage;
     private bool _statusIsError;
@@ -165,6 +197,39 @@
             else
             {
                 _statusMessage = res.Error ?? "Unable to switch to player session.";
+                _statusIsError = true;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RegisterPlayerAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_regUsername) || string.IsNullOrWhiteSpace(_regFullName) || string.IsNullOrWhiteSpace(_regPassword))
+        {
+            _statusMessage = "Please fill username, display name, and password (minimum 6 characters).";
+            _statusIsError = true;
+            return;
+        }
+
+        _busy = true;
+        _statusMessage = null;
+        try
+        {
+            var res = await Api.RegisterAsync(new RegisterRequest(_regUsername.Trim(), _regFullName.Trim(), _regPassword, UserRole.Player));
+            if (res.IsSuccess && res.Value is not null)
+            {
+                await GameState.SetUserSessionAsync(res.Value);
+                _statusMessage = $"Registered & signed in as {res.Value.FullName} ({res.Value.Role}).";
+                _statusIsError = false;
+                _regPassword = string.Empty;
+            }
+            else
+            {
+                _statusMessage = res.Error ?? "Registration failed.";
                 _statusIsError = true;
             }
         }

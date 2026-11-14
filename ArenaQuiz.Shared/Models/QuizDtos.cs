@@ -67,3 +67,8 @@ public sealed record CreateQuestionRequest(
     int TimeLimitSeconds,
     int BasePoints,
     string Explanation);
+
+public sealed record GenerateAiQuizRequest(
+    string Topic,
+    int QuestionCount = 3,
+    string Difficulty = "Intermediate");

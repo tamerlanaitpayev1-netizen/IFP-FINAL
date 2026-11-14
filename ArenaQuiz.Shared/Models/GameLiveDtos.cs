@@ -87,7 +87,8 @@ public sealed record RoomSnapshotDto(
     bool IsPaused = false,
     int AnsweredCount = 0,
     int ActivePlayerCount = 0,
-    string? HostControlToken = null);
+    string? HostControlToken = null,
+    bool IsHostConnected = true);
 
 public sealed record ReactionEventDto(
     string RoomCode,

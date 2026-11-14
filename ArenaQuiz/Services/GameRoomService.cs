@@ -49,14 +49,16 @@ public sealed class GameRoomService(
         return Result<RoomSnapshotDto>.Success(room.BuildSnapshot(hostControlToken: hostControlToken));
     }
 
-    public Task<Result<RoomSnapshotDto>> ReclaimHostAsync(string roomCode, string hostControlToken, string newConnectionId)
+    public async Task<Result<RoomSnapshotDto>> ReclaimHostAsync(string roomCode, string hostControlToken, string newConnectionId)
     {
         string code = roomCode.Trim().ToUpperInvariant();
         if (!_rooms.TryGetValue(code, out var room))
         {
-            return Task.FromResult(Result<RoomSnapshotDto>.Failure("Room not found or already closed."));
+            return Result<RoomSnapshotDto>.Failure("Room not found or already closed.");
         }
 
+        RoomSnapshotDto hostSnapshot;
+        RoomSnapshotDto broadcastSnapshot;
         lock (room.SyncRoot)
         {
             if (string.IsNullOrWhiteSpace(hostControlToken) ||
@@ -64,13 +66,18 @@ public sealed class GameRoomService(
                     System.Text.Encoding.UTF8.GetBytes(room.HostControlToken),
                     System.Text.Encoding.UTF8.GetBytes(hostControlToken.Trim())))
             {
-                return Task.FromResult(Result<RoomSnapshotDto>.Failure("Unauthorized: invalid host recovery token."));
+                return Result<RoomSnapshotDto>.Failure("Unauthorized: invalid host recovery token.");
             }
 
             room.HostConnectionId = newConnectionId;
+            room.IsHostConnected = true;
             room.LastActivityUtc = DateTime.UtcNow;
-            return Task.FromResult(Result<RoomSnapshotDto>.Success(room.BuildSnapshot(hostControlToken: room.HostControlToken)));
+            hostSnapshot = room.BuildSnapshot(hostControlToken: room.HostControlToken);
+            broadcastSnapshot = hostSnapshot with { HostControlToken = null };
         }
+
+        await broadcaster.RoomStateUpdated(code, broadcastSnapshot);
+        return Result<RoomSnapshotDto>.Success(hostSnapshot);
     }
 
     public async Task<Result<(RoomSnapshotDto Snapshot, PlayerStandingDto Player, bool IsReconnect)>> JoinRoomAsync(
@@ -517,6 +524,24 @@ public sealed class GameRoomService(
     public async Task HandleDisconnectAsync(string connectionId)
     {
         _reactionCooldowns.TryRemove(connectionId, out _);
+
+        foreach (var candidateRoom in _rooms.Values)
+        {
+            RoomSnapshotDto? hostDropSnapshot = null;
+            lock (candidateRoom.SyncRoot)
+            {
+                if (candidateRoom.HostConnectionId == connectionId && candidateRoom.Phase != RoomPhase.PodiumFinished)
+                {
+                    candidateRoom.IsHostConnected = false;
+                    hostDropSnapshot = candidateRoom.BuildSnapshot();
+                }
+            }
+
+            if (hostDropSnapshot is not null)
+            {
+                await broadcaster.RoomStateUpdated(candidateRoom.RoomCode, hostDropSnapshot);
+            }
+        }
 
         if (!_connections.TryRemove(connectionId, out var mapping))
         {
@@ -986,6 +1011,7 @@ public sealed class GameRoomService(
         public bool AutoAdvance { get; } = autoAdvance;
         public string HostConnectionId { get; set; } = hostConnectionId;
         public string HostControlToken { get; } = hostControlToken;
+        public bool IsHostConnected { get; set; } = true;
         public RoomPhase Phase { get; set; } = RoomPhase.Lobby;
         public int CurrentQuestionIndex { get; set; } = -1;
         public int RemainingSeconds { get; set; }
@@ -1052,7 +1078,8 @@ public sealed class GameRoomService(
                 IsPaused,
                 CurrentQuestionSubmissions.Count,
                 activeCount,
-                hostControlToken);
+                hostControlToken,
+                IsHostConnected);
         }
     }
 }

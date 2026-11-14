@@ -119,9 +119,14 @@
                                 <span class="aq-badge aq-badge-neutral">@room.QuizTitle</span>
                                 <span class="aq-badge aq-badge-cobalt">@FormatMode(room.Mode)</span>
                             </div>
-                            <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => _projectorMode = false">
-                                Exit Projector
-                            </button>
+                            <div class="aq-row-wrap">
+                                <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="ToggleFullscreenAsync">
+                                    Fullscreen
+                                </button>
+                                <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => _projectorMode = false">
+                                    Exit Projector
+                                </button>
+                            </div>
                         </div>
 
                         @if (room.Phase == RoomPhase.Lobby)
@@ -378,35 +383,48 @@
 
             <div class="aq-card aq-card-elevated aq-stack-md">
                 <div class="aq-row-between">
-                    <h2 class="aq-heading-md">Smart Topic Template &amp; JSON Tools</h2>
+                    <h2 class="aq-heading-md">AI Quiz Generator, Starter Templates &amp; Bulk Import</h2>
                     <div class="aq-row-wrap">
                         <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="ExportCurrentJsonAsync">
                             Export JSON
                         </button>
                         <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => _showJsonImport = !_showJsonImport">
-                            @(_showJsonImport ? "Hide JSON Panel" : "Import / View JSON")
+                            @(_showJsonImport ? "Hide Import Panel" : "Import JSON / CSV")
                         </button>
                     </div>
                 </div>
 
                 <div class="aq-row-wrap">
                     <div class="aq-flex-1">
-                        <label class="aq-label" for="template-topic">Topic for 1-Click Starter Questions</label>
+                        <label class="aq-label" for="template-topic">Quiz Topic (AI Draft or Starter Questions)</label>
                         <input id="template-topic" class="aq-input" @bind="_templateTopic" placeholder="e.g., Distributed Systems, C# LINQ, Cybersecurity" />
                     </div>
+                    <button type="button" class="aq-btn aq-btn-primary aq-btn-sm" disabled="@_aiGenerating" @onclick="GenerateAiDraftAsync">
+                        @(_aiGenerating ? "Generating AI Draft..." : "Generate AI Quiz Draft")
+                    </button>
                     <button type="button" class="aq-btn aq-btn-dark aq-btn-sm" @onclick="AppendTopicTemplateQuestions">
-                        Generate 3 Starter Questions
+                        + 3 Starter Questions
                     </button>
                 </div>
 
                 @if (_showJsonImport)
                 {
-                    <div class="aq-stack-sm">
-                        <label class="aq-label" for="json-payload">Quiz JSON Payload (Import or Copy Export)</label>
-                        <textarea id="json-payload" class="aq-textarea font-mono-code" @bind="_jsonText" placeholder="Paste CreateQuizRequest JSON here..."></textarea>
-                        <div class="aq-row-wrap">
-                            <button type="button" class="aq-btn aq-btn-primary aq-btn-sm" @onclick="ImportFromJson">Apply Imported JSON</button>
-                            <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => CopyTextAsync(_jsonText)">Copy JSON</button>
+                    <div class="aq-stack-md">
+                        <div class="aq-stack-sm">
+                            <label class="aq-label" for="json-payload">Quiz JSON Payload (Import or Copy Export)</label>
+                            <textarea id="json-payload" class="aq-textarea font-mono-code" @bind="_jsonText" placeholder="Paste CreateQuizRequest JSON here..."></textarea>
+                            <div class="aq-row-wrap">
+                                <button type="button" class="aq-btn aq-btn-primary aq-btn-sm" @onclick="ImportFromJson">Apply Imported JSON</button>
+                                <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm" @onclick="() => CopyTextAsync(_jsonText)">Copy JSON</button>
+                            </div>
+                        </div>
+
+                        <div class="aq-stack-sm">
+                            <label class="aq-label" for="csv-payload">CSV Question Rows (Prompt,OptA,OptB,OptC,OptD,CorrectIndex or 2-option Prompt,True,False,CorrectIndex)</label>
+                            <textarea id="csv-payload" class="aq-textarea font-mono-code" @bind="_csvText" placeholder="Prompt,OptA,OptB,OptC,OptD,CorrectIndex,TimeLimit,Points,Explanation"></textarea>
+                            <div class="aq-row-wrap">
+                                <button type="button" class="aq-btn aq-btn-dark aq-btn-sm" @onclick="ImportFromCsv">Import CSV Questions</button>
+                            </div>
                         </div>
                     </div>
                 }
@@ -455,12 +473,12 @@
                                 <div class="aq-row-wrap">
                                     <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm"
                                             disabled="@(qIdx == 0)"
-                                            @onclick="() => MoveQuestion(qIdx, -1)">
+                                            @onclick="() => MoveUp(qIdx)">
                                         Up
                                     </button>
                                     <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm"
                                             disabled="@(qIdx == _editQuestions.Count - 1)"
-                                            @onclick="() => MoveQuestion(qIdx, 1)">
+                                            @onclick="() => MoveDown(qIdx)">
                                         Down
                                     </button>
                                     <button type="button" class="aq-btn aq-btn-secondary aq-btn-sm"
@@ -475,9 +493,18 @@
                                 </div>
                             </div>
 
-                            <div>
-                                <label class="aq-label" for="q-prompt-@qIdx">Question Prompt</label>
-                                <input id="q-prompt-@qIdx" class="aq-input" @bind="q.Prompt" placeholder="Enter question prompt..." />
+                            <div class="aq-grid-2">
+                                <div>
+                                    <label class="aq-label" for="q-prompt-@qIdx">Question Prompt</label>
+                                    <input id="q-prompt-@qIdx" class="aq-input" @bind="q.Prompt" placeholder="Enter question prompt..." />
+                                </div>
+                                <div>
+                                    <label class="aq-label" for="q-format-@qIdx">Question Format</label>
+                                    <select id="q-format-@qIdx" class="aq-select" value="@q.OptionCount" @onchange="e => ChangeOptionCount(q, e)">
+                                        <option value="4">4 Options (Multiple Choice)</option>
+                                        <option value="2">2 Options (True / False)</option>
+                                    </select>
+                                </div>
                             </div>
 
                             <div>
@@ -486,7 +513,7 @@
                             </div>
 
                             <div class="aq-grid-2">
-                                @for (int oi = 0; oi < 4; oi++)
+                                @for (int oi = 0; oi < q.OptionCount; oi++)
                                 {
                                     int optIdx = oi;
                                     string letter = ((char)('A' + optIdx)).ToString();
@@ -501,10 +528,10 @@
                                 <div>
                                     <label class="aq-label" for="q-correct-@qIdx">Correct Answer</label>
                                     <select id="q-correct-@qIdx" class="aq-select" @bind="q.CorrectOptionIndex">
-                                        <option value="0">Option A</option>
-                                        <option value="1">Option B</option>
-                                        <option value="2">Option C</option>
-                                        <option value="3">Option D</option>
+                                        @for (int oi = 0; oi < q.OptionCount; oi++)
+                                        {
+                                            <option value="@oi">Option @((char)('A' + oi))</option>
+                                        }
                                     </select>
                                 </div>
                                 <div>
@@ -559,6 +586,8 @@
     private string _templateTopic = "ASP.NET Core & SignalR";
     private bool _showJsonImport;
     private string _jsonText = string.Empty;
+    private string _csvText = string.Empty;
+    private bool _aiGenerating;
     private bool _savingQuiz;
     private string? _editorMessage;
     private bool _editorMessageError;
@@ -609,6 +638,18 @@
         await GameState.LeaveRoomAsync();
     }
 
+    private async Task ToggleFullscreenAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("arenaFullscreen.toggle");
+        }
+        catch
+        {
+            // Fullscreen API unavailable in unsupported or headless browsers.
+        }
+    }
+
     private string BuildJoinUrl(string roomCode) =>
         $"{Nav.BaseUri.TrimEnd('/')}/play?pin={Uri.EscapeDataString(roomCode)}";
 
@@ -647,16 +688,7 @@
         _editDescription = detail.Description;
         _editQuestions = detail.Questions
             .OrderBy(q => q.OrderIndex)
-            .Select(q => new EditableQuestionModel
-            {
-                Prompt = q.Prompt,
-                CodeSnippet = q.CodeSnippet ?? string.Empty,
-                Options = EnsureFourOptions(q.Options),
-                CorrectOptionIndex = q.CorrectOptionIndex,
-                TimeLimitSeconds = q.TimeLimitSeconds,
-                BasePoints = q.BasePoints,
-                Explanation = q.Explanation
-            })
+            .Select(MapQuestionToEditable)
             .ToList();
 
         if (_editQuestions.Count == 0)
@@ -688,6 +720,7 @@
             Prompt = $"{src.Prompt} (Copy)",
             CodeSnippet = src.CodeSnippet,
             Options = [.. src.Options],
+            OptionCount = src.OptionCount,
             CorrectOptionIndex = src.CorrectOptionIndex,
             TimeLimitSeconds = src.TimeLimitSeconds,
             BasePoints = src.BasePoints,
@@ -695,6 +728,10 @@
         };
         _editQuestions.Insert(index + 1, copy);
     }
+
+    private void MoveUp(int index) => MoveQuestion(index, -1);
+
+    private void MoveDown(int index) => MoveQuestion(index, 1);
 
     private void MoveQuestion(int index, int delta)
     {
@@ -704,6 +741,18 @@
             return;
         }
         (_editQuestions[index], _editQuestions[target]) = (_editQuestions[target], _editQuestions[index]);
+    }
+
+    private static void ChangeOptionCount(EditableQuestionModel q, ChangeEventArgs e)
+    {
+        int count = int.TryParse(e.Value?.ToString(), out int parsed) && parsed == 2 ? 2 : 4;
+        q.OptionCount = count;
+        if (count == 2 && string.IsNullOrWhiteSpace(q.Options[0]) && string.IsNullOrWhiteSpace(q.Options[1]))
+        {
+            q.Options[0] = "True";
+            q.Options[1] = "False";
+        }
+        q.CorrectOptionIndex = Math.Clamp(q.CorrectOptionIndex, 0, count - 1);
     }
 
     private void RemoveQuestion(int index)
@@ -787,14 +836,44 @@
             string.IsNullOrWhiteSpace(_editCategory) ? "General" : _editCategory.Trim(),
             _editDescription.Trim(),
             GameState.CurrentUser.FullName,
-            _editQuestions.Select(q => new CreateQuestionRequest(
-                q.Prompt.Trim(),
-                string.IsNullOrWhiteSpace(q.CodeSnippet) ? null : q.CodeSnippet.Trim(),
-                q.Options.Select(o => o.Trim()).ToList(),
-                Math.Clamp(q.CorrectOptionIndex, 0, 3),
-                Math.Clamp(q.TimeLimitSeconds, 5, 180),
-                Math.Clamp(q.BasePoints, 100, 5000),
-                q.Explanation.Trim())).ToList());
+            _editQuestions.Select(q =>
+            {
+                int count = q.OptionCount == 2 ? 2 : 4;
+                return new CreateQuestionRequest(
+                    q.Prompt.Trim(),
+                    string.IsNullOrWhiteSpace(q.CodeSnippet) ? null : q.CodeSnippet.Trim(),
+                    q.Options.Take(count).Select(o => o.Trim()).ToList(),
+                    Math.Clamp(q.CorrectOptionIndex, 0, count - 1),
+                    Math.Clamp(q.TimeLimitSeconds, 5, 180),
+                    Math.Clamp(q.BasePoints, 100, 5000),
+                    q.Explanation.Trim());
+            }).ToList());
+
+    private async Task GenerateAiDraftAsync()
+    {
+        string topic = string.IsNullOrWhiteSpace(_templateTopic) ? "Software Engineering" : _templateTopic.Trim();
+        _aiGenerating = true;
+        _editorMessage = null;
+        try
+        {
+            var res = await Api.GenerateAiQuizAsync(new GenerateAiQuizRequest(topic, 3, "Intermediate"));
+            if (res.IsSuccess && res.Value is not null)
+            {
+                ApplyDraftToEditor(res.Value);
+                _editorMessage = $"AI generated \"{res.Value.Title}\" ({_editQuestions.Count} questions). Review and save to SQLite when ready.";
+                _editorMessageError = false;
+            }
+            else
+            {
+                _editorMessage = res.Error ?? "AI draft generation failed.";
+                _editorMessageError = true;
+            }
+        }
+        finally
+        {
+            _aiGenerating = false;
+        }
+    }
 
     private async Task ExportCurrentJsonAsync()
     {
@@ -823,20 +902,7 @@
                 return;
             }
 
-            _editTitle = imported.Title;
-            _editCategory = imported.Category;
-            _editDescription = imported.Description;
-            _editQuestions = imported.Questions.Select(q => new EditableQuestionModel
-            {
-                Prompt = q.Prompt,
-                CodeSnippet = q.CodeSnippet ?? string.Empty,
-                Options = EnsureFourOptions(q.Options),
-                CorrectOptionIndex = Math.Clamp(q.CorrectOptionIndex, 0, 3),
-                TimeLimitSeconds = q.TimeLimitSeconds > 0 ? q.TimeLimitSeconds : 20,
-                BasePoints = q.BasePoints > 0 ? q.BasePoints : 1000,
-                Explanation = q.Explanation
-            }).ToList();
-
+            ApplyDraftToEditor(imported);
             _editorMessage = $"Imported {_editQuestions.Count} questions from JSON.";
             _editorMessageError = false;
         }
@@ -845,6 +911,107 @@
             _editorMessage = $"Invalid JSON: {ex.Message}";
             _editorMessageError = true;
         }
+    }
+
+    private void ImportFromCsv()
+    {
+        if (string.IsNullOrWhiteSpace(_csvText))
+        {
+            _editorMessage = "Paste CSV question rows before importing.";
+            _editorMessageError = true;
+            return;
+        }
+
+        var imported = new List<EditableQuestionModel>();
+        var lines = _csvText.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (string line in lines)
+        {
+            var cols = ParseCsvRow(line);
+            if (cols.Count < 4) continue;
+            if (cols[0].Equals("Prompt", StringComparison.OrdinalIgnoreCase)
+                || cols[0].Equals("Question", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Support 2-option CSV (Prompt,OptA,OptB,CorrectIndex[,Time[,Pts[,Exp]]])
+            // and 4-option CSV (Prompt,OptA,OptB,OptC,OptD,CorrectIndex[,Time[,Pts[,Exp]]]).
+            bool isTwoOption = int.TryParse(cols[3], out int twoCorrect)
+                && (cols.Count == 4 || !int.TryParse(cols.ElementAtOrDefault(5), out _));
+
+            if (isTwoOption)
+            {
+                int time = cols.Count > 4 && int.TryParse(cols[4], out int t2) ? Math.Clamp(t2, 5, 180) : 20;
+                int pts = cols.Count > 5 && int.TryParse(cols[5], out int p2) ? Math.Clamp(p2, 100, 5000) : 1000;
+                string exp = cols.Count > 6 ? cols[6] : string.Empty;
+                imported.Add(new EditableQuestionModel
+                {
+                    Prompt = cols[0],
+                    Options = EnsureFourOptions([cols[1], cols[2]]),
+                    OptionCount = 2,
+                    CorrectOptionIndex = Math.Clamp(twoCorrect, 0, 1),
+                    TimeLimitSeconds = time,
+                    BasePoints = pts,
+                    Explanation = exp
+                });
+            }
+            else if (cols.Count >= 6)
+            {
+                int correct = int.TryParse(cols[5], out int c4) ? Math.Clamp(c4, 0, 3) : 0;
+                int time = cols.Count > 6 && int.TryParse(cols[6], out int t4) ? Math.Clamp(t4, 5, 180) : 20;
+                int pts = cols.Count > 7 && int.TryParse(cols[7], out int p4) ? Math.Clamp(p4, 100, 5000) : 1000;
+                string exp = cols.Count > 8 ? cols[8] : string.Empty;
+                imported.Add(new EditableQuestionModel
+                {
+                    Prompt = cols[0],
+                    Options = EnsureFourOptions([cols[1], cols[2], cols[3], cols[4]]),
+                    OptionCount = 4,
+                    CorrectOptionIndex = correct,
+                    TimeLimitSeconds = time,
+                    BasePoints = pts,
+                    Explanation = exp
+                });
+            }
+        }
+
+        if (imported.Count == 0)
+        {
+            _editorMessage = "No valid CSV question rows parsed. Expected Prompt,OptA,OptB,OptC,OptD,CorrectIndex.";
+            _editorMessageError = true;
+            return;
+        }
+
+        if (_editQuestions.Count == 1 && string.IsNullOrWhiteSpace(_editQuestions[0].Prompt))
+        {
+            _editQuestions.Clear();
+        }
+        _editQuestions.AddRange(imported);
+        _editorMessage = $"Imported {imported.Count} questions from CSV.";
+        _editorMessageError = false;
+    }
+
+    private void ApplyDraftToEditor(CreateQuizRequest draft)
+    {
+        _editingQuizId = null;
+        _editTitle = draft.Title;
+        _editCategory = draft.Category;
+        _editDescription = draft.Description;
+        _editQuestions = draft.Questions.Select(q =>
+        {
+            int count = q.Options.Count == 2 ? 2 : 4;
+            return new EditableQuestionModel
+            {
+                Prompt = q.Prompt,
+                CodeSnippet = q.CodeSnippet ?? string.Empty,
+                Options = EnsureFourOptions(q.Options),
+                OptionCount = count,
+                CorrectOptionIndex = Math.Clamp(q.CorrectOptionIndex, 0, count - 1),
+                TimeLimitSeconds = q.TimeLimitSeconds > 0 ? q.TimeLimitSeconds : 20,
+                BasePoints = q.BasePoints > 0 ? q.BasePoints : 1000,
+                Explanation = q.Explanation
+            };
+        }).ToList();
     }
 
     private async Task SaveQuizAsync()
@@ -857,9 +1024,9 @@
             return;
         }
 
-        if (_editQuestions.Any(q => string.IsNullOrWhiteSpace(q.Prompt) || q.Options.Any(string.IsNullOrWhiteSpace)))
+        if (_editQuestions.Any(q => string.IsNullOrWhiteSpace(q.Prompt) || q.Options.Take(q.OptionCount).Any(string.IsNullOrWhiteSpace)))
         {
-            _editorMessage = "Every question requires a prompt and all 4 non-empty options.";
+            _editorMessage = "Every question requires a prompt and all selected options filled.";
             _editorMessageError = true;
             return;
         }
@@ -910,6 +1077,57 @@
         }
     }
 
+    private static EditableQuestionModel MapQuestionToEditable(QuestionDto q)
+    {
+        int count = q.Options.Count == 2 ? 2 : 4;
+        return new EditableQuestionModel
+        {
+            Prompt = q.Prompt,
+            CodeSnippet = q.CodeSnippet ?? string.Empty,
+            Options = EnsureFourOptions(q.Options),
+            OptionCount = count,
+            CorrectOptionIndex = Math.Clamp(q.CorrectOptionIndex, 0, count - 1),
+            TimeLimitSeconds = q.TimeLimitSeconds,
+            BasePoints = q.BasePoints,
+            Explanation = q.Explanation
+        };
+    }
+
+    private static List<string> ParseCsvRow(string line)
+    {
+        var cols = new List<string>();
+        var current = new System.Text.StringBuilder();
+        bool inQuotes = false;
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (c == '"')
+            {
+                if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    current.Append('"');
+                    i++;
+                }
+                else
+                {
+                    inQuotes = !inQuotes;
+                }
+            }
+            else if (c == ',' && !inQuotes)
+            {
+                cols.Add(current.ToString().Trim());
+                current.Clear();
+            }
+            else
+            {
+                current.Append(c);
+            }
+        }
+        cols.Add(current.ToString().Trim());
+        return cols;
+    }
+
     private static List<string> EnsureFourOptions(IReadOnlyList<string> source)
     {
         var list = source.Take(4).ToList();
@@ -938,6 +1156,7 @@
         public string Prompt { get; set; } = string.Empty;
         public string CodeSnippet { get; set; } = string.Empty;
         public List<string> Options { get; set; } = [string.Empty, string.Empty, string.Empty, string.Empty];
+        public int OptionCount { get; set; } = 4;
         public int CorrectOptionIndex { get; set; }
         public int TimeLimitSeconds { get; set; } = 20;
         public int BasePoints { get; set; } = 1000;

@@ -239,8 +239,8 @@
           <ul>
             <li><strong>Tamerlan Aitpayev</strong> — Backend &amp; Real-Time Security Architect<br/>
               <small>SignalR <code>GameHub</code>, <code>GameRoomService</code> (wall-clock timers, O(P) deltas, connection-bound anti-spoofing), PBKDF2/HMAC-SHA256 RBAC, EF Core SQLite, and server integration tests.</small></li>
-            <li><strong>Dias [Last Name]</strong> — Frontend &amp; Blazor WASM UI/UX Engineer<br/>
-              <small>Blazor WASM pages, 7 reusable &amp; templated components, pure-C# <code>QrCodeEncoder</code>, Dark Mode, <code>en/ru/kk</code> localization, WebAudio synthesizer, PWA, and <code>bUnit</code> UI tests.</small></li>
+            <li><strong>Dias Shamel</strong> — Frontend &amp; Blazor WASM UI/UX Engineer<br/>
+              <small>Blazor WASM pages, 7 localized reusable &amp; templated components, pure-C# <code>QrCodeEncoder</code>, Dark Mode, <code>en/ru/kk</code> localization, WebAudio synthesizer, PWA, and <code>bUnit</code> UI tests.</small></li>
           </ul>
         </div>
         <div class="card">
@@ -463,8 +463,8 @@
           <div class="mockup-pin" style="margin:0.65rem 0;">AQ4829</div>
           <p>Pure C# ISO/IEC 18004 <code>QrCodeEncoder</code> renders crisp scannable SVG QR codes offline with zero third-party APIs.</p>
           <ul style="font-size:0.85rem;color:#E5E7EB;">
-            <li>Host Pause &amp; Resume Timer controls</li>
-            <li>Live delta badge: <code>14 / 18 answered</code></li>
+            <li>Fullscreen API toggle + Host Pause/Resume controls</li>
+            <li>Live delta badge: <code>14 / 18 answered</code> &amp; player avatars</li>
           </ul>
         </div>
 
@@ -487,9 +487,9 @@
         <div class="card">
           <h3>Full Quiz Editor &amp; UX Polish</h3>
           <ul>
-            <li><strong>Complete CRUD:</strong> load quizzes for editing (<code>/edit</code>), reorder Up/Down, duplicate, 2-step delete confirmation.</li>
-            <li><strong>Productivity Tools:</strong> 1-click starter question template generator + JSON import/export.</li>
-            <li><strong>Accessible Design Tokens:</strong> 0 inline <code>style=""</code> attributes across all <code>.razor</code> files, Dark Mode, <code>EN / RU / KK</code>, PWA manifest.</li>
+            <li><strong>Complete CRUD:</strong> load quizzes for editing (<code>/edit</code>), 2-option True/False &amp; 4-option formats, reorder Up/Down, duplicate, 2-step delete.</li>
+            <li><strong>Productivity Tools:</strong> server-side AI Quiz Draft generator (<code>/api/quizzes/generate-ai</code>), CSV &amp; JSON bulk import/export.</li>
+            <li><strong>Accessible Design Tokens:</strong> 0 inline <code>style=""</code> attributes across all <code>.razor</code> files, Dark Mode, full component <code>EN/RU/KK</code>, skeleton loaders, urgent pulse &amp; PWA.</li>
           </ul>
         </div>
       </div>
@@ -524,23 +524,23 @@
 
     <!-- SLIDE 8 -->
     <section class="slide" data-title="Testing &amp; Security Verification">
-      <div><span class="badge emerald">Quality Assurance · 34 / 34 Automated Tests Passing</span></div>
-      <h2>Comprehensive Unit, SQLite, bUnit UI, RBAC &amp; SignalR Integration Tests</h2>
+      <div><span class="badge emerald">Quality Assurance · 38 / 38 Automated Tests Passing · GitHub CI</span></div>
+      <h2>Comprehensive Unit, SQLite, bUnit UI, RBAC, Load &amp; SignalR Tests</h2>
       <div class="grid-2">
         <div class="card">
-          <h3>Unit, State Engine &amp; SQLite Tests (22 Tests)</h3>
+          <h3>Unit, State Engine &amp; SQLite Tests (23 Tests)</h3>
           <ul>
             <li><strong><code>ScoreEngineTests</code> (8):</strong> speed bonus curve, streak cap (50%), overtime grace rejection, tie-breakers, CSV escaping, <code>Result&lt;T&gt;</code>.</li>
             <li><strong><code>GameRoomServiceTests</code> (10):</strong> full lifecycle, <code>ReconnectToken</code>, pause/resume, <code>ReclaimHost</code>, non-host rejection, spoofed <code>PlayerId</code> block, fair Knockout disconnect handling, room eviction.</li>
-            <li><strong><code>QuizRepositorySqliteTests</code> (4):</strong> seeding, answer-free <code>QuizPublicPreviewDto</code>, <code>UpdateQuizAsync</code>, PBKDF2 + blocked Host <code>quick-switch</code>.</li>
+            <li><strong><code>QuizRepositorySqliteTests</code> (5):</strong> seeding, answer-free <code>QuizPublicPreviewDto</code>, <code>UpdateQuizAsync</code>, PBKDF2 + blocked Host <code>quick-switch</code>, forced-Player registration &amp; 2-option quizzes.</li>
           </ul>
         </div>
         <div class="card">
-          <h3>UI (bUnit) &amp; Live Server Integration (12 Tests)</h3>
+          <h3>UI (bUnit), Security &amp; 100-Player Load (15 Tests)</h3>
           <ul>
             <li><strong><code>BlazorComponentsBunitTests</code> (8):</strong> option clicks, reveal states, <code>RoundTimer</code> pause/urgent states, <code>QrCodeSvg</code> matrix output, team toggle, generic <code>TemplatedMetricGrid</code>.</li>
-            <li><strong><code>ServerSecurityAndApiIntegrationTests</code> (4 via <code>WebApplicationFactory&lt;Program&gt;</code>):</strong> HTTP <code>401</code>/<code>403</code>/<code>200</code>/<code>201</code>/<code>204</code> enforcement, zero <code>correctOptionIndex</code> leaks, <code>/healthz</code>, <code>/api/openapi.json</code>, and real SignalR <code>HubConnection</code> anti-spoofing + host reclaim.</li>
-            <li><strong>Coverage (Cobertura):</strong> <strong>89.3%</strong> in <code>ArenaQuiz.Shared</code>, <strong>88.0%</strong> in <code>ArenaQuiz</code> Server.</li>
+            <li><strong><code>ServerSecurityAndApiIntegrationTests</code> (7 via <code>WebApplicationFactory&lt;Program&gt;</code>):</strong> HTTP &amp; SignalR <code>[Authorize]</code> on <code>CreateRoom</code> and CSV export, AI quiz endpoint, <code>/api/auth/register</code> + <code>429</code> brute-force rate limit, and <strong>100-concurrent-player room load test</strong>.</li>
+            <li><strong>Coverage (Cobertura) &amp; CI:</strong> <strong>91.8%</strong> in <code>ArenaQuiz.Shared</code>, <strong>86.0%</strong> in <code>ArenaQuiz</code> Server · <code>.github/workflows/ci.yml</code>.</li>
           </ul>
         </div>
       </div>
@@ -564,9 +564,9 @@
           <h3>Project Summary — ArenaQuiz v2.0</h3>
           <ul>
             <li>Tamper-resistant server-authoritative timing with zero answer leaks.</li>
-            <li>Real cryptographic PBKDF2 + HMAC-SHA256 RBAC and verified SignalR host/player isolation.</li>
-            <li>Accessible cross-device UI with Projector QR, Dark Mode, trilingual UI (EN/RU/KK), and PWA support.</li>
-            <li>34/34 automated tests passing in Release mode with full documentation on GitHub.</li>
+            <li>Real cryptographic PBKDF2 + HMAC-SHA256 RBAC, login <code>429</code> rate limiting, and SignalR <code>[Authorize]</code> isolation.</li>
+            <li>Accessible cross-device UI with Fullscreen Projector QR, avatars, skeletons, Dark Mode, trilingual UI (EN/RU/KK), AI drafts &amp; PWA.</li>
+            <li>38/38 automated tests passing in Release mode with GitHub Actions CI &amp; documentation.</li>
           </ul>
         </div>
       </div>

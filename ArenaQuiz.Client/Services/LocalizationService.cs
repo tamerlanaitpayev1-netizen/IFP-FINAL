@@ -51,7 +51,31 @@ public sealed class LocalizationService
 
         ["auth.title"] = ("Account & Access", "Аккаунт и права доступа", "Аккаунт және рұқсаттар"),
         ["auth.login_btn"] = ("Sign In", "Войти", "Кіру"),
-        ["auth.player_switch"] = ("Continue as Guest Player", "Войти как гость-игрок", "Қонақ ойыншы ретінде кіру")
+        ["auth.player_switch"] = ("Continue as Guest Player", "Войти как гость-игрок", "Қонақ ойыншы ретінде кіру"),
+
+        ["comp.question"] = ("Question", "Вопрос", "Сұрақ"),
+        ["comp.up_to"] = ("Up to", "До", "Дейін"),
+        ["comp.explanation"] = ("Explanation", "Пояснение", "Түсіндірме"),
+        ["comp.standings"] = ("Live Standings", "Таблица лидеров", "Көшбасшылар кестесі"),
+        ["comp.participant"] = ("participant", "участник", "қатысушы"),
+        ["comp.participants"] = ("participants", "участников", "қатысушы"),
+        ["comp.players"] = ("Players", "Игроки", "Ойыншылар"),
+        ["comp.teams"] = ("Teams", "Команды", "Командалар"),
+        ["comp.no_players"] = ("No players have joined yet.", "Игроки ещё не присоединились.", "Ойыншылар әлі қосылған жоқ."),
+        ["comp.roster"] = ("Lobby Roster", "Участники лобби", "Лобби қатысушылары"),
+        ["comp.joined"] = ("joined", "в комнате", "бөлмеде"),
+        ["comp.waiting_pin"] = ("Waiting for players to enter the Room PIN from desktop or mobile...", "Ожидаем игроков по коду комнаты с телефона или ноутбука...", "Телефон не ноутбуктен бөлме коды арқылы ойыншыларды күтуде..."),
+        ["comp.kick"] = ("Kick", "Удалить", "Шығару"),
+        ["comp.timer"] = ("Timer", "Таймер", "Таймер"),
+        ["comp.paused"] = ("Paused", "Пауза", "Кідірту"),
+        ["comp.notice"] = ("Notice:", "Внимание:", "Назар аударыңыз:"),
+        ["comp.dismiss"] = ("Dismiss", "Скрыть", "Жабу"),
+        ["comp.reconnecting"] = ("Reconnecting...", "Переподключение...", "Қайта қосылуда..."),
+        ["comp.reconnecting_desc"] = ("Restoring live connection automatically.", "Автоматически восстанавливаем соединение.", "Байланыс автоматты түрде қалпына келтірілуде."),
+        ["comp.host_reconnecting"] = ("Host is reconnecting...", "Ведущий переподключается...", "Жүргізуші қайта қосылуда..."),
+        ["comp.host_reconnecting_desc"] = ("Please stay in the arena — the session resumes automatically.", "Оставайтесь в комнате — игра продолжится автоматически.", "Бөлмеде қалыңыз — ойын автоматты түрде жалғасады."),
+        ["comp.vote"] = ("vote", "голос", "дауыс"),
+        ["comp.votes"] = ("votes", "голосов", "дауыс")
     };
 
     public void SetLanguage(string lang)

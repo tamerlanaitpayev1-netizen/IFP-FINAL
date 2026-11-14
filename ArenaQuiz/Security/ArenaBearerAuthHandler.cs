@@ -17,18 +17,30 @@ public sealed class ArenaBearerAuthHandler(
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        if (!Request.Headers.TryGetValue("Authorization", out var headerValues))
+        string? token = null;
+
+        if (Request.Headers.TryGetValue("Authorization", out var headerValues))
+        {
+            string header = headerValues.ToString();
+            if (header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                token = header["Bearer ".Length..].Trim();
+            }
+        }
+
+        // SignalR WebSockets and browser CSV downloads pass bearer tokens via ?access_token=...
+        if (string.IsNullOrWhiteSpace(token) &&
+            (Request.Path.StartsWithSegments("/gamehub") || Request.Path.StartsWithSegments("/api/sessions")) &&
+            Request.Query.TryGetValue("access_token", out var accessToken))
+        {
+            token = accessToken.ToString().Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(token))
         {
             return Task.FromResult(AuthenticateResult.NoResult());
         }
 
-        string header = headerValues.ToString();
-        if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
-            return Task.FromResult(AuthenticateResult.NoResult());
-        }
-
-        string token = header["Bearer ".Length..].Trim();
         var principal = tokenService.ValidateToken(token);
         if (principal is null)
         {

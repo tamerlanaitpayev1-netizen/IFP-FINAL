@@ -28,6 +28,7 @@ builder.Services.AddAuthorization();
 
 builder.Services.AddScoped<QuizRepositoryService>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddHttpClient<AiQuizGeneratorService>();
 builder.Services.AddSingleton<IGameRoomBroadcaster, SignalRGameRoomBroadcaster>();
 builder.Services.AddSingleton<GameRoomService>();
 builder.Services.AddHostedService<RoomCleanupHostedService>();

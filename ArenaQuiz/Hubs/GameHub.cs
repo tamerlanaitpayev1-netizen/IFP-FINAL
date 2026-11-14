@@ -1,6 +1,7 @@
 using ArenaQuiz.Services;
 using ArenaQuiz.Shared.Contracts;
 using ArenaQuiz.Shared.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ArenaQuiz.Hubs;
@@ -11,6 +12,7 @@ namespace ArenaQuiz.Hubs;
 /// </summary>
 public sealed class GameHub(GameRoomService roomService) : Hub<IGameHubClient>, IGameHubServer
 {
+    [Authorize(Roles = "Host,Admin")]
     public async Task<Result<RoomSnapshotDto>> CreateRoom(CreateRoomRequest request)
     {
         var result = await roomService.CreateRoomAsync(request, Context.ConnectionId);

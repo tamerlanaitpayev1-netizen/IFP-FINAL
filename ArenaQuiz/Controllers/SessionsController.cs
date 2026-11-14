@@ -2,6 +2,7 @@ using System.Text;
 using ArenaQuiz.Services;
 using ArenaQuiz.Shared.Functional;
 using ArenaQuiz.Shared.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ArenaQuiz.Controllers;
@@ -14,6 +15,7 @@ public sealed class SessionsController(QuizRepositoryService repo) : ControllerB
     public async Task<ActionResult<AnalyticsOverviewDto>> GetAnalytics(CancellationToken ct) =>
         Ok(await repo.GetAnalyticsOverviewAsync(ct));
 
+    [Authorize(Roles = "Host,Admin")]
     [HttpGet("{id:guid}/export.csv")]
     public async Task<IActionResult> ExportCsv(Guid id, CancellationToken ct)
     {

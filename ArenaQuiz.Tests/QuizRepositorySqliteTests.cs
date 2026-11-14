@@ -148,4 +148,26 @@ public sealed class QuizRepositorySqliteTests : IAsyncLifetime
         Assert.False(blockedHostSwitch.IsSuccess);
         Assert.Contains("password", blockedHostSwitch.Error, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public async Task RegisterAsync_ForcesPlayerRoleAndAllowsTwoOptionQuestions()
+    {
+        string uniqueUser = $"player_{Guid.NewGuid():N}"[..16];
+        var registerRes = await _auth.RegisterAsync(new RegisterRequest(uniqueUser, "New Student", "secret123", UserRole.Host));
+        Assert.True(registerRes.IsSuccess);
+        Assert.Equal(UserRole.Player, registerRes.Value!.Role);
+
+        var twoOptReq = new CreateQuizRequest(
+            "True/False Check",
+            "Testing",
+            "2-option quiz validation",
+            "Host",
+            [new CreateQuestionRequest("HTTP is stateless by default?", null, ["True", "False"], 0, 15, 1000, "Yes")]);
+
+        var createRes = await _repo.CreateQuizAsync(twoOptReq);
+        Assert.True(createRes.IsSuccess);
+        var loaded = await _repo.GetQuizDetailAsync(createRes.Value!.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal(2, loaded.Questions[0].Options.Count);
+    }
 }

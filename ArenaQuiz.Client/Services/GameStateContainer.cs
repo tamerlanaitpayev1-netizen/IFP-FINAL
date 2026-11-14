@@ -57,6 +57,11 @@ public sealed class GameStateContainer(
         CurrentUser = session;
         api.SetBearerToken(session.Token);
         await PersistAuthSessionAsync(session);
+        if (_hub is not null)
+        {
+            await _hub.DisposeAsync();
+            _hub = null;
+        }
         NotifyStateChanged();
     }
 
@@ -103,7 +108,11 @@ public sealed class GameStateContainer(
             if (_hub is null)
             {
                 _hub = new HubConnectionBuilder()
-                    .WithUrl(navigation.ToAbsoluteUri("/gamehub"))
+                    .WithUrl(navigation.ToAbsoluteUri("/gamehub"), options =>
+                    {
+                        options.AccessTokenProvider = () => Task.FromResult<string?>(
+                            string.IsNullOrWhiteSpace(CurrentUser.Token) ? null : CurrentUser.Token);
+                    })
                     .WithAutomaticReconnect([TimeSpan.Zero, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5)])
                     .Build();
 

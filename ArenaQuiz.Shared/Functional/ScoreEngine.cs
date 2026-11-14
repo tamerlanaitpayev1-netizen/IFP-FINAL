@@ -169,6 +169,29 @@ public static class ScoreEngine
         return sb.ToString();
     }
 
+    private static readonly string[] Avatars =
+    [
+        "🦊", "🚀", "⚡", "🎯", "🛡️", "🧠", "🔥", "💎", "🦁", "👾", "🌟", "🦅"
+    ];
+
+    /// <summary>
+    /// Deterministically assigns a friendly emoji avatar to a player nickname.
+    /// </summary>
+    public static string GetPlayerAvatar(string? nickname)
+    {
+        if (string.IsNullOrWhiteSpace(nickname))
+        {
+            return Avatars[0];
+        }
+
+        uint hash = 2166136261u;
+        foreach (char c in nickname.Trim().ToUpperInvariant())
+        {
+            hash = (hash ^ c) * 16777619u;
+        }
+        return Avatars[hash % (uint)Avatars.Length];
+    }
+
     private static string EscapeCsv(string? value)
     {
         if (string.IsNullOrEmpty(value))

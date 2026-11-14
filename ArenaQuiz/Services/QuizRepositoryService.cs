@@ -289,9 +289,9 @@ public sealed class QuizRepositoryService(ArenaDbContext db)
             {
                 return $"Question #{i + 1} prompt cannot be empty.";
             }
-            if (q.Options.Count < 2 || q.Options.Any(string.IsNullOrWhiteSpace))
+            if (q.Options.Count < 2 || q.Options.Count > 4 || q.Options.Any(string.IsNullOrWhiteSpace))
             {
-                return $"Question #{i + 1} must have non-empty answer options.";
+                return $"Question #{i + 1} must have 2 to 4 non-empty answer options.";
             }
             if (q.CorrectOptionIndex < 0 || q.CorrectOptionIndex >= q.Options.Count)
             {

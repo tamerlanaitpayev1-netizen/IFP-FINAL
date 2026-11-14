@@ -18,11 +18,18 @@ public sealed class TokenService
 
     private readonly byte[] _signingKey;
 
-    public TokenService(IConfiguration configuration)
+    public TokenService(IConfiguration configuration, IHostEnvironment? env = null)
     {
         string? configuredSecret = configuration["Security:TokenSigningKey"];
         if (string.IsNullOrWhiteSpace(configuredSecret))
         {
+            bool isProd = env?.IsProduction() == true ||
+                          string.Equals(configuration["ASPNETCORE_ENVIRONMENT"], "Production", StringComparison.OrdinalIgnoreCase);
+            if (isProd)
+            {
+                throw new InvalidOperationException("Security:TokenSigningKey must be configured in Production environment.");
+            }
+
             configuredSecret = "ArenaQuiz_Dev_Signing_Key_Change_In_Prod_2026!";
         }
         _signingKey = SHA256.HashData(Encoding.UTF8.GetBytes(configuredSecret));

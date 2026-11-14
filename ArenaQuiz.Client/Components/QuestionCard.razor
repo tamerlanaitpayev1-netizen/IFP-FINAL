@@ -1,17 +1,19 @@
 @using ArenaQuiz.Shared.Models
+@implements IDisposable
+@inject IServiceProvider Services
 
 <section class="aq-card aq-enter" aria-label="Question card">
     <div class="aq-row-between aq-mb-md">
         <div class="aq-row-wrap">
             <span class="aq-badge aq-badge-neutral tabular">
-                Question @(Question.QuestionIndex + 1) / @Question.TotalQuestions
+                @T("comp.question", "Question") @(Question.QuestionIndex + 1) / @Question.TotalQuestions
             </span>
             <span class="aq-badge aq-badge-cobalt">
                 @FormatMode(Question.Mode)
             </span>
         </div>
         <span class="aq-badge aq-badge-amber tabular">
-            Up to @Question.BasePoints pts
+            @T("comp.up_to", "Up to") @Question.BasePoints pts
         </span>
     </div>
 
@@ -75,7 +77,7 @@
                     @if (Reveal is not null)
                     {
                         <span class="aq-vote-meta tabular">
-                            <span>@votes @(votes == 1 ? "vote" : "votes")</span>
+                            <span>@votes @(votes == 1 ? T("comp.vote", "vote") : T("comp.votes", "votes"))</span>
                             <span>@votePct%</span>
                         </span>
                         <svg class="aq-vote-bar-track" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true">
@@ -90,13 +92,15 @@
     @if (Reveal is not null && !string.IsNullOrWhiteSpace(Reveal.Explanation))
     {
         <div class="aq-card-elevated aq-mt-md">
-            <div class="aq-label">Explanation</div>
+            <div class="aq-label">@T("comp.explanation", "Explanation")</div>
             <p class="aq-mt-sm aq-mb-sm">@Reveal.Explanation</p>
         </div>
     }
 </section>
 
 @code {
+    private LocalizationService? _loc;
+
     [Parameter, EditorRequired]
     public LiveQuestionViewDto Question { get; set; } = default!;
 
@@ -114,6 +118,27 @@
 
     [Parameter]
     public EventCallback<int> OnOptionSelected { get; set; }
+
+    protected override void OnInitialized()
+    {
+        _loc = Services.GetService(typeof(LocalizationService)) as LocalizationService;
+        if (_loc is not null)
+        {
+            _loc.OnLanguageChanged += HandleLanguageChanged;
+        }
+    }
+
+    private void HandleLanguageChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private string T(string key, string fallback) => _loc is not null ? _loc.T(key) : fallback;
+
+    public void Dispose()
+    {
+        if (_loc is not null)
+        {
+            _loc.OnLanguageChanged -= HandleLanguageChanged;
+        }
+    }
 
     private async Task SelectOptionAsync(int index)
     {

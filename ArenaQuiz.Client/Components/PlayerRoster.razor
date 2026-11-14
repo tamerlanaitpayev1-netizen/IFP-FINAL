@@ -1,16 +1,18 @@
 @using ArenaQuiz.Shared.Functional
 @using ArenaQuiz.Shared.Models
+@implements IDisposable
+@inject IServiceProvider Services
 
 <section class="aq-card" aria-label="Connected players">
     <div class="aq-row-between aq-mb-md">
-        <h3 class="aq-heading-md">Lobby Roster</h3>
-        <span class="aq-badge aq-badge-neutral tabular">@Players.Count joined</span>
+        <h3 class="aq-heading-md">@T("comp.roster", "Lobby Roster")</h3>
+        <span class="aq-badge aq-badge-neutral tabular">@Players.Count @T("comp.joined", "joined")</span>
     </div>
 
     @if (Players.Count == 0)
     {
         <div class="aq-card-elevated aq-empty-state">
-            Waiting for players to enter the Room PIN from desktop or mobile...
+            @T("comp.waiting_pin", "Waiting for players to enter the Room PIN from desktop or mobile...")
         </div>
     }
     else
@@ -22,6 +24,7 @@
                     <div class="aq-row-wrap aq-flex-1">
                         <span class="aq-dot @(player.IsConnected ? "aq-dot-online" : "aq-dot-offline")"
                               title="@(player.IsConnected ? "Connected" : "Disconnected")"></span>
+                        <span class="aq-avatar" aria-hidden="true">@ScoreEngine.GetPlayerAvatar(player.Nickname)</span>
                         <div class="aq-flex-1">
                             <strong class="aq-block aq-truncate">@player.Nickname</strong>
                             @if (Mode == GameMode.TeamBattle && player.Team != TeamSide.None)
@@ -37,7 +40,7 @@
                                 class="aq-btn aq-btn-secondary aq-btn-sm"
                                 title="Remove @player.Nickname"
                                 @onclick="() => OnRemovePlayer.InvokeAsync(player.PlayerId)">
-                            Kick
+                            @T("comp.kick", "Kick")
                         </button>
                     }
                 </div>
@@ -47,6 +50,8 @@
 </section>
 
 @code {
+    private LocalizationService? _loc;
+
     [Parameter]
     public IReadOnlyList<PlayerStandingDto> Players { get; set; } = [];
 
@@ -58,4 +63,25 @@
 
     [Parameter]
     public EventCallback<string> OnRemovePlayer { get; set; }
+
+    protected override void OnInitialized()
+    {
+        _loc = Services.GetService(typeof(LocalizationService)) as LocalizationService;
+        if (_loc is not null)
+        {
+            _loc.OnLanguageChanged += HandleLanguageChanged;
+        }
+    }
+
+    private void HandleLanguageChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private string T(string key, string fallback) => _loc is not null ? _loc.T(key) : fallback;
+
+    public void Dispose()
+    {
+        if (_loc is not null)
+        {
+            _loc.OnLanguageChanged -= HandleLanguageChanged;
+        }
+    }
 }

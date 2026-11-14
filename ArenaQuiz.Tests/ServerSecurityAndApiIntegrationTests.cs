@@ -1,11 +1,14 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using ArenaQuiz.Services;
 using ArenaQuiz.Shared.Models;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArenaQuiz.Tests;
 
@@ -136,18 +139,40 @@ public sealed class ServerSecurityAndApiIntegrationTests(ArenaQuizWebFactory fac
     [Fact]
     public async Task SignalRHub_RealConnectionsEnforceHostControlAntiSpoofingAndReclaim()
     {
-        // Trigger server host creation so BaseAddress is active
-        using var _ = factory.CreateClient();
+        using var client = factory.CreateClient();
 
-        await using var hostConn = BuildHubConnection();
+        var hostLogin = await client.PostAsJsonAsync("/api/auth/login", new LoginRequest("tamerlan", "host123"));
+        Assert.Equal(HttpStatusCode.OK, hostLogin.StatusCode);
+        var hostSession = await hostLogin.Content.ReadFromJsonAsync<UserSessionDto>();
+        Assert.NotNull(hostSession);
+
+        var studentSwitch = await client.PostAsJsonAsync("/api/auth/quick-switch", new QuickSwitchRoleRequest("student"));
+        Assert.Equal(HttpStatusCode.OK, studentSwitch.StatusCode);
+        var studentSession = await studentSwitch.Content.ReadFromJsonAsync<UserSessionDto>();
+        Assert.NotNull(studentSession);
+
+        await using var unauthHostConn = BuildHubConnection();
+        await using var studentHostConn = BuildHubConnection(studentSession.Token);
+        await using var hostConn = BuildHubConnection(hostSession.Token);
         await using var player1Conn = BuildHubConnection();
         await using var player2Conn = BuildHubConnection();
         await using var hostRecoveryConn = BuildHubConnection();
 
+        await unauthHostConn.StartAsync();
+        await studentHostConn.StartAsync();
         await hostConn.StartAsync();
         await player1Conn.StartAsync();
         await player2Conn.StartAsync();
         await hostRecoveryConn.StartAsync();
+
+        // CreateRoom enforces [Authorize(Roles = "Host,Admin")]
+        await Assert.ThrowsAsync<HubException>(() => unauthHostConn.InvokeAsync<Result<RoomSnapshotDto>>(
+            "CreateRoom",
+            new CreateRoomRequest(SeededQuiz1Id, "Anonymous", GameMode.ClassicSpeed, false)));
+
+        await Assert.ThrowsAsync<HubException>(() => studentHostConn.InvokeAsync<Result<RoomSnapshotDto>>(
+            "CreateRoom",
+            new CreateRoomRequest(SeededQuiz1Id, "Student", GameMode.ClassicSpeed, false)));
 
         var createRes = await hostConn.InvokeAsync<Result<RoomSnapshotDto>>(
             "CreateRoom",
@@ -209,11 +234,144 @@ public sealed class ServerSecurityAndApiIntegrationTests(ArenaQuizWebFactory fac
         Assert.False(oldHostAdvance.IsSuccess);
     }
 
-    private HubConnection BuildHubConnection() =>
+    [Fact]
+    public async Task CsvExportAndAiGenerator_EnforceHostAuthorization()
+    {
+        using var client = factory.CreateClient();
+
+        var studentSwitch = await client.PostAsJsonAsync("/api/auth/quick-switch", new QuickSwitchRoleRequest("student"));
+        Assert.Equal(HttpStatusCode.OK, studentSwitch.StatusCode);
+        var studentSession = await studentSwitch.Content.ReadFromJsonAsync<UserSessionDto>();
+        Assert.NotNull(studentSession);
+
+        var hostLogin = await client.PostAsJsonAsync("/api/auth/login", new LoginRequest("tamerlan", "host123"));
+        Assert.Equal(HttpStatusCode.OK, hostLogin.StatusCode);
+        var hostSession = await hostLogin.Content.ReadFromJsonAsync<UserSessionDto>();
+        Assert.NotNull(hostSession);
+
+        // AI quiz generation requires Host/Admin
+        var aiReq = new GenerateAiQuizRequest("Distributed Systems", 3, "Intermediate");
+        var unauthAi = await client.PostAsJsonAsync("/api/quizzes/generate-ai", aiReq);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthAi.StatusCode);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", studentSession.Token);
+        var playerAi = await client.PostAsJsonAsync("/api/quizzes/generate-ai", aiReq);
+        Assert.Equal(HttpStatusCode.Forbidden, playerAi.StatusCode);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", hostSession.Token);
+        var hostAi = await client.PostAsJsonAsync("/api/quizzes/generate-ai", aiReq);
+        Assert.Equal(HttpStatusCode.OK, hostAi.StatusCode);
+        var draft = await hostAi.Content.ReadFromJsonAsync<CreateQuizRequest>();
+        Assert.NotNull(draft);
+        Assert.Equal(3, draft.Questions.Count);
+
+        // Ensure at least one archived session exists via analytics endpoint
+        client.DefaultRequestHeaders.Authorization = null;
+        var analytics = await client.GetFromJsonAsync<AnalyticsOverviewDto>("/api/sessions/analytics");
+        Assert.NotNull(analytics);
+        Guid sessionId = analytics.RecentSessions.FirstOrDefault()?.SessionId ?? Guid.NewGuid();
+
+        // CSV export requires Host/Admin via Bearer header OR ?access_token=
+        var unauthCsv = await client.GetAsync($"/api/sessions/{sessionId}/export.csv");
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthCsv.StatusCode);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", studentSession.Token);
+        var playerCsv = await client.GetAsync($"/api/sessions/{sessionId}/export.csv");
+        Assert.Equal(HttpStatusCode.Forbidden, playerCsv.StatusCode);
+
+        if (analytics.RecentSessions.Count > 0)
+        {
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", hostSession.Token);
+            var hostHeaderCsv = await client.GetAsync($"/api/sessions/{sessionId}/export.csv");
+            Assert.Equal(HttpStatusCode.OK, hostHeaderCsv.StatusCode);
+
+            client.DefaultRequestHeaders.Authorization = null;
+            var hostQueryCsv = await client.GetAsync($"/api/sessions/{sessionId}/export.csv?access_token={Uri.EscapeDataString(hostSession.Token)}");
+            Assert.Equal(HttpStatusCode.OK, hostQueryCsv.StatusCode);
+            string csvText = await hostQueryCsv.Content.ReadAsStringAsync();
+            Assert.Contains("Nickname", csvText);
+        }
+    }
+
+    [Fact]
+    public async Task AuthRegisterAndLoginRateLimit_ForcesPlayerRoleAndReturns429()
+    {
+        using var client = factory.CreateClient();
+        string uniqueUser = $"rate_{Guid.NewGuid():N}"[..16];
+
+        // Even if payload asks for Host role, public registration always issues Player
+        var regRes = await client.PostAsJsonAsync("/api/auth/register",
+            new RegisterRequest(uniqueUser, "Rate Limit User", "StrongPass123", UserRole.Host));
+        Assert.Equal(HttpStatusCode.OK, regRes.StatusCode);
+        var session = await regRes.Content.ReadFromJsonAsync<UserSessionDto>();
+        Assert.NotNull(session);
+        Assert.Equal(UserRole.Player, session.Role);
+
+        // First 5 bad attempts return 401; 6th bad attempt returns 429 Too Many Requests
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            var bad = await client.PostAsJsonAsync("/api/auth/login", new LoginRequest(uniqueUser, "wrong-password"));
+            Assert.Equal(HttpStatusCode.Unauthorized, bad.StatusCode);
+        }
+
+        var lockedOut = await client.PostAsJsonAsync("/api/auth/login", new LoginRequest(uniqueUser, "wrong-password"));
+        Assert.Equal(HttpStatusCode.TooManyRequests, lockedOut.StatusCode);
+    }
+
+    [Fact]
+    public async Task LoadTest_100ConcurrentPlayersJoinAndSubmitAnswers_CompletesCleanly()
+    {
+        using var _ = factory.CreateClient();
+        var roomService = factory.Services.GetRequiredService<GameRoomService>();
+
+        var createRes = await roomService.CreateRoomAsync(
+            new CreateRoomRequest(SeededQuiz1Id, "Load Host", GameMode.ClassicSpeed, false),
+            "load-host-conn");
+        Assert.True(createRes.IsSuccess);
+        string roomCode = createRes.Value!.RoomCode;
+
+        var joinTasks = Enumerable.Range(0, 100)
+            .Select(i => roomService.JoinRoomAsync(
+                new JoinRoomRequest(roomCode, $"Player_{i:D3}", TeamSide.None, null),
+                $"load-conn-{i}"))
+            .ToArray();
+
+        var joinResults = await Task.WhenAll(joinTasks);
+        Assert.All(joinResults, r => Assert.True(r.IsSuccess));
+
+        var startRes = await roomService.StartGameAsync(roomCode, "load-host-conn");
+        Assert.True(startRes.IsSuccess);
+        Assert.Equal(100, startRes.Value!.Players.Count);
+
+        var submitTasks = Enumerable.Range(0, 100)
+            .Select(i => roomService.SubmitAnswerAsync(
+                new SubmitAnswerRequest(roomCode, joinResults[i].Value.Player.PlayerId, 0, i % 4),
+                $"load-conn-{i}"))
+            .ToArray();
+
+        var submitResults = await Task.WhenAll(submitTasks);
+        Assert.All(submitResults, r => Assert.True(r.IsSuccess));
+
+        var revealRes = await roomService.RevealCurrentQuestionAsync(roomCode, "load-host-conn");
+        Assert.True(revealRes.IsSuccess);
+        Assert.Equal(100, revealRes.Value!.OptionVoteCounts.Sum());
+
+        var nextRes = await roomService.NextQuestionAsync(roomCode, "load-host-conn");
+        Assert.True(nextRes.IsSuccess);
+        var snapshot = nextRes.Value!;
+        Assert.Equal(100, snapshot.Players.Count);
+        Assert.Equal(100, snapshot.Players.Sum(p => p.AnsweredCount));
+    }
+
+    private HubConnection BuildHubConnection(string? bearerToken = null) =>
         new HubConnectionBuilder()
             .WithUrl(new Uri(factory.Server.BaseAddress, "gamehub"), options =>
             {
                 options.HttpMessageHandlerFactory = _ => factory.Server.CreateHandler();
+                if (!string.IsNullOrWhiteSpace(bearerToken))
+                {
+                    options.AccessTokenProvider = () => Task.FromResult<string?>(bearerToken);
+                }
             })
             .Build();
 }

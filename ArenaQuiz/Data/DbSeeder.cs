@@ -11,7 +11,10 @@ public static class DbSeeder
     {
         await db.Database.EnsureCreatedAsync();
 
-        if (!await db.Users.AnyAsync())
+        bool isProd = string.Equals(Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), "Production", StringComparison.OrdinalIgnoreCase);
+        bool seedDemoInProd = Environment.GetEnvironmentVariable("ARENAQUIZ_SEED_DEMO") == "1";
+
+        if (!await db.Users.AnyAsync() && (!isProd || seedDemoInProd))
         {
             db.Users.AddRange(
                 new UserAccountEntity

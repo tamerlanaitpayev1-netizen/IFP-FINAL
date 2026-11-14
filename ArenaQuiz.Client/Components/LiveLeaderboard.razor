@@ -1,12 +1,14 @@
 @using ArenaQuiz.Shared.Functional
 @using ArenaQuiz.Shared.Models
+@implements IDisposable
+@inject IServiceProvider Services
 
 <section class="aq-card" aria-label="Live leaderboard">
     <div class="aq-row-between aq-mb-md">
         <div>
-            <h3 class="aq-heading-md">Live Standings</h3>
+            <h3 class="aq-heading-md">@T("comp.standings", "Live Standings")</h3>
             <div class="aq-text-xs">
-                @Players.Count @(Players.Count == 1 ? "participant" : "participants")
+                @Players.Count @(Players.Count == 1 ? T("comp.participant", "participant") : T("comp.participants", "participants"))
             </div>
         </div>
 
@@ -16,12 +18,12 @@
                 <button type="button"
                         class="aq-btn aq-btn-sm @(!_showTeams ? "aq-btn-dark" : "aq-btn-secondary")"
                         @onclick="() => _showTeams = false">
-                    Players
+                    @T("comp.players", "Players")
                 </button>
                 <button type="button"
                         class="aq-btn aq-btn-sm @(_showTeams ? "aq-btn-dark" : "aq-btn-secondary")"
                         @onclick="() => _showTeams = true">
-                    Teams
+                    @T("comp.teams", "Teams")
                 </button>
             </div>
         }
@@ -50,7 +52,7 @@
     }
     else if (Players.Count == 0)
     {
-        <p class="aq-text-muted">No players have joined yet.</p>
+        <p class="aq-text-muted">@T("comp.no_players", "No players have joined yet.")</p>
     }
     else
     {
@@ -61,6 +63,7 @@
                 <div class="aq-leaderboard-row @(isSelf ? "is-self" : string.Empty) @(p.IsEliminated ? "is-eliminated" : string.Empty)">
                     <div class="aq-row-wrap aq-flex-1">
                         <span class="aq-rank-pill aq-rank-@p.Rank tabular">@p.Rank</span>
+                        <span class="aq-avatar" aria-hidden="true">@ScoreEngine.GetPlayerAvatar(p.Nickname)</span>
                         <div class="aq-flex-1">
                             <div class="aq-row-wrap">
                                 <strong class="aq-truncate">@p.Nickname</strong>
@@ -105,6 +108,8 @@
 </section>
 
 @code {
+    private LocalizationService? _loc;
+
     [Parameter]
     public IReadOnlyList<PlayerStandingDto> Players { get; set; } = [];
 
@@ -118,4 +123,25 @@
     public string? HighlightPlayerId { get; set; }
 
     private bool _showTeams;
+
+    protected override void OnInitialized()
+    {
+        _loc = Services.GetService(typeof(LocalizationService)) as LocalizationService;
+        if (_loc is not null)
+        {
+            _loc.OnLanguageChanged += HandleLanguageChanged;
+        }
+    }
+
+    private void HandleLanguageChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private string T(string key, string fallback) => _loc is not null ? _loc.T(key) : fallback;
+
+    public void Dispose()
+    {
+        if (_loc is not null)
+        {
+            _loc.OnLanguageChanged -= HandleLanguageChanged;
+        }
+    }
 }

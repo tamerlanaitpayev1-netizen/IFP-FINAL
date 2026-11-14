@@ -7,7 +7,7 @@ namespace ArenaQuiz.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public sealed class QuizzesController(QuizRepositoryService repo) : ControllerBase
+public sealed class QuizzesController(QuizRepositoryService repo, AiQuizGeneratorService aiGenerator) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<QuizSummaryDto>>> GetAll(CancellationToken ct) =>
@@ -44,6 +44,17 @@ public sealed class QuizzesController(QuizRepositoryService repo) : ControllerBa
         return result.IsSuccess && result.Value is not null
             ? CreatedAtAction(nameof(GetById), new { id = result.Value.Id }, result.Value)
             : BadRequest(new { error = result.Error });
+    }
+
+    [Authorize(Roles = "Host,Admin")]
+    [HttpPost("generate-ai")]
+    public async Task<ActionResult<CreateQuizRequest>> GenerateAiDraft(
+        [FromBody] GenerateAiQuizRequest request,
+        CancellationToken ct)
+    {
+        string author = User.FindFirst("fullname")?.Value ?? User.Identity?.Name ?? "Host";
+        var draft = await aiGenerator.GenerateQuizDraftAsync(request, author, ct);
+        return Ok(draft);
     }
 
     [Authorize(Roles = "Host,Admin")]

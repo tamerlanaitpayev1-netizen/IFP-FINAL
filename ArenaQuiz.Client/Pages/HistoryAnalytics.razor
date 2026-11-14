@@ -1,5 +1,6 @@
 @page "/analytics"
 @inject QuizApiClient Api
+@inject GameStateContainer GameState
 @inject LocalizationService Loc
 @implements IDisposable
 
@@ -13,17 +14,32 @@
         </div>
         @if (_overview?.RecentSessions.Count > 0)
         {
-            <a class="aq-btn aq-btn-secondary aq-btn-sm"
-               href="api/sessions/@_overview.RecentSessions[0].SessionId/export.csv"
-               download="arenaquiz-latest.csv">
-                @Loc.T("analytics.export") (Latest)
-            </a>
+            @if (CanExportCsv)
+            {
+                <a class="aq-btn aq-btn-secondary aq-btn-sm"
+                   href="@BuildExportUrl(_overview.RecentSessions[0].SessionId)"
+                   download="arenaquiz-latest.csv">
+                    @Loc.T("analytics.export") (Latest)
+                </a>
+            }
+            else
+            {
+                <a class="aq-btn aq-btn-secondary aq-btn-sm" href="/auth">
+                    Sign in as Host to export CSV
+                </a>
+            }
         }
     </div>
 
     @if (_loading)
     {
-        <div class="aq-card aq-empty-state">Loading match analytics...</div>
+        <div class="aq-grid-4">
+            <div class="aq-card aq-skeleton"></div>
+            <div class="aq-card aq-skeleton"></div>
+            <div class="aq-card aq-skeleton"></div>
+            <div class="aq-card aq-skeleton"></div>
+        </div>
+        <div class="aq-card aq-skeleton-lg"></div>
     }
     else if (_overview is null)
     {
@@ -78,11 +94,20 @@
                             <span class="aq-badge aq-badge-emerald tabular">
                                 @($"{session.AverageAccuracyPercent:F1}%") accuracy · @session.ParticipantCount players
                             </span>
-                            <a class="aq-btn aq-btn-secondary aq-btn-sm"
-                               href="api/sessions/@session.SessionId/export.csv"
-                               download="arenaquiz-@(session.RoomCode).csv">
-                                @Loc.T("analytics.export")
-                            </a>
+                            @if (CanExportCsv)
+                            {
+                                <a class="aq-btn aq-btn-secondary aq-btn-sm"
+                                   href="@BuildExportUrl(session.SessionId)"
+                                   download="arenaquiz-@(session.RoomCode).csv">
+                                    @Loc.T("analytics.export")
+                                </a>
+                            }
+                            else
+                            {
+                                <a class="aq-btn aq-btn-secondary aq-btn-sm" href="/auth">
+                                    Host Export
+                                </a>
+                            }
                         </div>
                     </div>
 
@@ -172,11 +197,17 @@
     private AnalyticsOverviewDto? _overview;
     private bool _loading = true;
 
+    private bool CanExportCsv =>
+        GameState.CurrentUser.Role is UserRole.Host or UserRole.Admin
+        && !string.IsNullOrWhiteSpace(GameState.CurrentUser.Token);
+
     protected override async Task OnInitializedAsync()
     {
         Loc.OnLanguageChanged += HandleLanguageChanged;
+        GameState.OnStateChanged += HandleLanguageChanged;
         try
         {
+            await GameState.TryRestoreAuthSessionAsync();
             _overview = await Api.GetAnalyticsAsync();
         }
         finally
@@ -184,6 +215,9 @@
             _loading = false;
         }
     }
+
+    private string BuildExportUrl(Guid sessionId) =>
+        $"api/sessions/{sessionId}/export.csv?access_token={Uri.EscapeDataString(GameState.CurrentUser.Token)}";
 
     private static string FormatMode(GameMode mode) => mode switch
     {
@@ -195,5 +229,9 @@
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
 
-    public void Dispose() => Loc.OnLanguageChanged -= HandleLanguageChanged;
+    public void Dispose()
+    {
+        Loc.OnLanguageChanged -= HandleLanguageChanged;
+        GameState.OnStateChanged -= HandleLanguageChanged;
+    }
 }

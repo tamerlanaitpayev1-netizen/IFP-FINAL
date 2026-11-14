@@ -8,8 +8,8 @@
 
 | Участник | Роль | Зона ответственности |
 |---|---|---|
-| **Тамерлан** | Backend & Real-Time Security Architect | `GameHub` (SignalR), `GameRoomService` (wall-clock таймеры, Pause/Resume, O(P) дельты `AnswerProgressDto`, привязка `HostConnectionId` и `HostControlToken`, защита от спуфинга `PlayerId` и захвата ника, `RoomCleanupHostedService`), `TokenService` (PBKDF2-SHA256 + HMAC-SHA256), `ArenaBearerAuthHandler`, `[Authorize(Roles = "Host,Admin")]`, `ArenaDbContext` + `DbSeeder` + `QuestionStatEntity`, `WebApplicationFactory` интеграционные и security-тесты (`xUnit`). |
-| **Диас** | Frontend & Blazor WASM UI/UX Engineer | Страницы (`Home`, `HostStudio`, `PlayArena`, `HistoryAnalytics`, `AccessControl`), компоненты (`QuestionCard`, `RoundTimer`, `LiveLeaderboard`, `PlayerRoster`, `TemplatedMetricGrid`, `ConnectionStatusBanner`, `QrCodeSvg`), чистый C# QR-генератор `QrCodeEncoder`, `LocalizationService` (`kk`/`ru`/`en`), `GameStateContainer` (session recovery, Dark Mode), `SoundService` (WebAudio API), PWA (`manifest.webmanifest`, `service-worker.js`), `app.css` (0 inline-стилей), тесты (`bUnit`). |
+| **Тамерлан Айтпаев (Tamerlan Aitpayev)** | Backend & Real-Time Security Architect | `GameHub` (SignalR + `[Authorize(Roles = "Host,Admin")]` на `CreateRoom`), `GameRoomService` (wall-clock таймеры, Pause/Resume, O(P) дельты `AnswerProgressDto`, привязка `HostConnectionId` и `HostControlToken`, `IsHostConnected`, защита от спуфинга `PlayerId` и захвата ника, `RoomCleanupHostedService`), `TokenService` (PBKDF2-SHA256 + HMAC-SHA256, обязательный ключ в `Production`), `ArenaBearerAuthHandler` (`?access_token=`), `AuthService` (`RegisterAsync`, rate limiting `429`), `AiQuizGeneratorService`, `SessionsController` (авторизованный CSV-экспорт), `ArenaDbContext` + `DbSeeder` + `QuestionStatEntity`, `WebApplicationFactory` интеграционные, security и load-тесты (`xUnit`), GitHub Actions CI. |
+| **Диас Шамель (Dias Shamel)** | Frontend & Blazor WASM UI/UX Engineer | Страницы (`Home`, `HostStudio` с Fullscreen Projector, AI-генератором, 2/4 вариантами и импортом CSV/JSON, `PlayArena`, `HistoryAnalytics` со skeleton-загрузчиками, `AccessControl` с регистрацией), все локализованные компоненты (`QuestionCard`, `RoundTimer`, `LiveLeaderboard`, `PlayerRoster`, `TemplatedMetricGrid`, `ConnectionStatusBanner` с баннером переподключения хоста, `QrCodeSvg`), чистый C# QR-генератор `QrCodeEncoder`, `LocalizationService` (`kk`/`ru`/`en`), `GameStateContainer` (SignalR `AccessTokenProvider`, session recovery, Dark Mode), `SoundService` (WebAudio API), PWA (`manifest.webmanifest`, `service-worker.js`), `app.css` (0 inline-стилей), тесты (`bUnit`). |
 | **Совместно** | Shared Core & Defense | `ArenaQuiz.Shared` (иммутабельные `record` DTO включая `QuizPublicPreviewDto`, движок `ScoreEngine`, монада `Result<T>`, контракты `IGameHubClient`/`IGameHubServer`), `README.md`, `docs/presentation.html`, подготовка защиты. |
 
 ---
@@ -171,23 +171,24 @@ erDiagram
 
 ## Безопасность, надёжность и оптимизация (v2.0)
 
-1. **Настоящий RBAC и криптография (`TokenService`, `ArenaBearerAuthHandler`)**:
+1. **Настоящий RBAC и криптография (`TokenService`, `ArenaBearerAuthHandler`, `AuthController`)**:
    - Пароли хэшируются с помощью **PBKDF2-SHA256** (100 000 итераций, 16-байтная случайная соль, сравнение через `CryptographicOperations.FixedTimeEquals`).
-   - Эндпоинты создания, редактирования и удаления квизов (`POST /api/quizzes`, `GET /api/quizzes/{id}/edit`, `PUT /api/quizzes/{id}`, `DELETE /api/quizzes/{id}`) защищены `[Authorize(Roles = "Host,Admin")]` и подписанными **HMAC-SHA256** Bearer-токенами.
-   - Клиент по умолчанию стартует с ролью `Guest Player` (`UserRole.Player`). Эндпоинт `/api/auth/quick-switch` разрешён строго для `Player`; повышение до `Host` требует парольной аутентификации через `/api/auth/login`.
+   - Эндпоинты создания/редактирования квизов (`POST /api/quizzes`, `POST /api/quizzes/generate-ai`, `GET /api/quizzes/{id}/edit`, `PUT /api/quizzes/{id}`, `DELETE /api/quizzes/{id}`), экспорт результатов (`GET /api/sessions/{id}/export.csv`) и создание SignalR-комнаты (`GameHub.CreateRoom`) защищены `[Authorize(Roles = "Host,Admin")]` и подписанными **HMAC-SHA256** Bearer-токенами (через заголовок `Authorization` или `?access_token=` для SignalR `AccessTokenProvider` и скачивания CSV).
+   - Клиент по умолчанию стартует с ролью `Guest Player` (`UserRole.Player`). Эндпоинт `/api/auth/quick-switch` разрешён строго для `Player`, а самостоятельная регистрация `/api/auth/register` всегда присваивает роль `UserRole.Player`.
+   - **Защита от перебора паролей и production-конфигурация**: `/api/auth/login` ограничивает неудачные попытки входа (5 ошибок в минуту -> HTTP `429 Too Many Requests`). В `Production`-окружении `TokenService` требует обязательного задания `Security:TokenSigningKey` при старте, а сид демо-аккаунтов в `DbSeeder` отключается (если явно не задан `ARENAQUIZ_SEED_DEMO=1`).
 2. **Защита от утечки ответов**:
    - Публичный эндпоинт `GET /api/quizzes/{id}` возвращает `QuizPublicPreviewDto` (`QuestionPublicDto`) — без `CorrectOptionIndex` и `Explanation`. Полная структура `QuizDetailDto` доступна только авторизованному `Host` на `/api/quizzes/{id}/edit`.
 3. **Защита SignalR Hub (`GameHub`, `GameRoomService`)**:
-   - Все управляющие действия хоста (`StartGame`, `TogglePauseQuestion`, `RevealCurrentQuestion`, `NextQuestion`, `RemovePlayer`) проверяют `room.HostConnectionId == callerConnectionId`.
-   - При обновлении вкладки хоста клиент автоматически вызывает `ReclaimHost(roomCode, hostControlToken)` с постоянным сравнением токена.
+   - Создание комнаты (`CreateRoom`) требует `[Authorize(Roles = "Host,Admin")]`; все управляющие действия хоста (`StartGame`, `TogglePauseQuestion`, `RevealCurrentQuestion`, `NextQuestion`, `RemovePlayer`) проверяют `room.HostConnectionId == callerConnectionId`.
+   - При обновлении вкладки хоста клиент автоматически вызывает `ReclaimHost(roomCode, hostControlToken)` с постоянным сравнением токена, а во время обрыва связи игрокам отображается баннер `IsHostConnected == false` («Host is reconnecting...»).
    - `SubmitAnswer` и `SendReaction` привязаны к `Context.ConnectionId` (исключена подмена чужого `PlayerId` или ника), а реакции ограничены по частоте (не чаще 1 раза в 1.5 сек на соединение).
    - Повторный вход под ником отключённого игрока без секретного `ReconnectToken` блокируется.
-4. **Надёжность и трафик**:
-   - **Wall-clock таймер**: проверка каждые 500 мс относительно `QuestionStartedAtUtc` и `TotalPausedDuration` исключает дрейф таймера и поддерживает паузу.
+4. **Надёжность, UX и трафик**:
+   - **Wall-clock таймер**: проверка каждые 500 мс относительно `QuestionStartedAtUtc` и `TotalPausedDuration` исключает дрейф таймера, поддерживает паузу и визуальный пульс на последних 5 секундах.
    - **O(P) дельты вместо O(P²)**: при отправке ответов сервер рассылает компактный `AnswerProgressUpdated` (`AnsweredCount / TotalActivePlayers`) вместо повторной сериализации всего `RoomSnapshotDto`.
    - **Фоновая очистка (`RoomCleanupHostedService`)**: каждые 2 минуты удаляет завершённые (`> 15 мин`) и брошенные (`> 30 мин`) комнаты и освобождает их таймеры.
    - **Справедливый Knockout**: при случайном обрыве сети отключённый игрок не выбывает на таймауте вопроса; выбывают только подключённые игроки, давшие неверный ответ или не успевшие ответить вовремя.
-   - **Проекция в SQL**: `GetAllQuizSummariesAsync` выбирает количество вопросов прямо в SQL-проекции `.Select(...)` без загрузки текстов вопросов и вариантов ответа.
+   - **Проекция в SQL и продуктивность**: `GetAllQuizSummariesAsync` выбирает количество вопросов в SQL `.Select(...)`, все UI-компоненты переведены на `kk`/`ru`/`en`, отображают аватары `ScoreEngine.GetPlayerAvatar` и skeleton-загрузчики.
 
 ---
 
@@ -218,19 +219,21 @@ erDiagram
 
 ### Для ведущего (Host)
 1. Перейдите на `/auth`, введите учётные данные (`tamerlan` / `host123` или `dias` / `host123`) и нажмите **Sign In**.
-2. Откройте `/host` (**Host Studio**). Во вкладке **Quiz Editor** можно создавать новые квизы, загружать и редактировать существующие, менять порядок вопросов (`Up`/`Down`), дублировать, генерировать стартовые вопросы по теме, а также импортировать/экспортировать JSON.
+2. Откройте `/host` (**Host Studio**). Во вкладке **Quiz Editor** можно создавать новые квизы (включая **2 Options (True/False)** и **4 Options**), генерировать черновик по теме на сервере (**Generate AI Quiz Draft** -> Anthropic API или встроенный шаблон), загружать и редактировать существующие, менять порядок вопросов (`Up`/`Down`), дублировать и импортировать/экспортировать **JSON** и **CSV**.
 3. Во вкладке **Live Game Console** выберите квиз и режим (`Classic Speed`, `Team Battle`, `Knockout`), затем создайте комнату.
-4. Откройте **Projector View** для демонстрации гигантского PIN и SVG QR-кода аудитории. Во время вопроса можно нажать **Pause Timer** / **Resume Timer** или досрочно открыть правильный ответ (**Reveal Answer Now**).
+4. Откройте **Projector View** (с кнопкой **Fullscreen** API) для демонстрации гигантского PIN и SVG QR-кода аудитории. Во время вопроса можно нажать **Pause Timer** / **Resume Timer** или досрочно открыть правильный ответ (**Reveal Answer Now**).
 
 ### Для игрока (Player)
-1. Отсканируйте QR-код с экрана ведущего или откройте `/` (или `/play`), введите 6-значный PIN и свой ник (можно также выбрать открытое лобби одним нажатием).
-2. Подключитесь с телефона, планшета или ноутбука. Переключатель темы (Light/Dark) и языка (`EN` / `RU` / `KZ`) доступен в верхней панели навигации.
+1. Отсканируйте QR-код с экрана ведущего или откройте `/` (или `/play`), введите 6-значный PIN и свой ник (можно также зарегистрировать личный аккаунт игрока на `/auth` или выбрать открытое лобби одним нажатием).
+2. Подключитесь с телефона, планшета или ноутбука. Переключатель темы (Light/Dark) и языка (`EN` / `RU` / `KZ`) доступен в верхней панели навигации и переводит как страницы, так и все компоненты игры.
 3. При потере Wi-Fi обновите страницу — сессия восстановится по `ReconnectToken` с сохранением набранных баллов.
 
 ### Диагностика и эндпоинты
 - `GET /healthz` — Liveness Health Check сервера.
 - `GET /api/openapi.json` — Сводная OpenAPI 3.0.3 спецификация API.
-- `GET /api/sessions/{id}/export.csv` — Скачивание отчёта завершённой сессии в RFC-4180 CSV.
+- `POST /api/auth/register` — Регистрация нового аккаунта с ролью `Player`.
+- `POST /api/quizzes/generate-ai` — Генерация черновика квиза по теме (только `Host`/`Admin`).
+- `GET /api/sessions/{id}/export.csv` — Скачивание отчёта завершённой сессии в RFC-4180 CSV (только `Host`/`Admin`, поддерживает `Authorization: Bearer` и `?access_token=`).
 
 ---
 
@@ -244,9 +247,10 @@ erDiagram
 dotnet restore ArenaQuiz.sln
 dotnet run --project ArenaQuiz/ArenaQuiz.csproj
 ```
-Демо-база `arenaquiz.db` автоматически создаётся и заполняется 3 квизами, историей игр, статистикой вопросов и аккаунтами (`tamerlan`/`host123`, `dias`/`host123`, `student`/`play123`).
+В `Development`-среде демо-база `arenaquiz.db` автоматически создаётся и заполняется 3 квизами, историей игр, статистикой вопросов и демо-аккаунтами (`tamerlan`/`host123`, `dias`/`host123`, `student`/`play123`). В `Production` сид демо-аккаунтов отключён (включается только при `ARENAQUIZ_SEED_DEMO=1`), а `Security:TokenSigningKey` обязателен к настройке.
 
-### Запуск тестов и покрытия кода (xUnit + bUnit + WebApplicationFactory + SignalR)
+### Запуск тестов, нагрузки и CI (xUnit + bUnit + WebApplicationFactory + SignalR)
 ```bash
 dotnet test ArenaQuiz.sln --configuration Release --collect:"XPlat Code Coverage" --logger "console;verbosity=normal"
 ```
+Текущий набор: **38 / 38 автоматических тестов** (включая нагрузочный тест на 100 одновременных игроков, SignalR `[Authorize]`, `429` rate limiting и авторизацию CSV/AI). Покрытие Cobertura: **91.8%** (`ArenaQuiz.Shared`), **86.0%** (`ArenaQuiz` Server). Автоматический запуск настроен в [`.github/workflows/ci.yml`](.github/workflows/ci.yml).

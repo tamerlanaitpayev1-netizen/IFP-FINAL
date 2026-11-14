@@ -103,6 +103,18 @@
             };
         })();
 
+        window.arenaFullscreen = {
+            toggle: async () => {
+                try {
+                    if (!document.fullscreenElement) {
+                        await document.documentElement.requestFullscreen?.();
+                    } else {
+                        await document.exitFullscreen?.();
+                    }
+                } catch { }
+            }
+        };
+
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/service-worker.js').catch(() => { });
         }
