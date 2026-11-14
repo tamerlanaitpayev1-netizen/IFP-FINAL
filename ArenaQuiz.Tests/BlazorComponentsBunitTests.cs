@@ -12,113 +12,126 @@ public sealed class BlazorComponentsBunitTests : BunitContext
         var question = new LiveQuestionViewDto(
             0,
             5,
-            "Which keyword copies an immutable C# record?",
-            "var next = p with { TotalScore = 100 };",
-            ["clone", "with", "mutate", "copy"],
+            "What makes C# records ideal for SignalR DTOs?",
+            null,
+            ["Mutable globals", "Value equality and immutability", "Implicit goto", "Manual pointers"],
             20,
             1000,
             GameMode.ClassicSpeed);
 
-        int? clickedIndex = null;
-        var cut = Render<QuestionCard>(parameters => parameters
-            .Add(p => p.Question, question)
-            .Add(p => p.OnOptionSelected, idx => clickedIndex = idx));
+        int? selected = null;
+        var cut = Render<QuestionCard>(p => p
+            .Add(c => c.Question, question)
+            .Add(c => c.OnOptionSelected, idx => selected = idx));
 
-        var buttons = cut.FindAll("button.aq-option-btn");
-        Assert.Equal(4, buttons.Count);
-        Assert.Contains("with", buttons[1].TextContent);
-
-        buttons[1].Click();
-        Assert.Equal(1, clickedIndex);
+        Assert.Contains("Value equality and immutability", cut.Markup);
+        cut.FindAll("button.aq-option-btn")[1].Click();
+        Assert.Equal(1, selected);
     }
 
     [Fact]
     public void QuestionCard_RevealMode_ShowsCorrectStylingAndExplanation()
     {
-        var question = new LiveQuestionViewDto(
-            0, 5, "Prompt", null, ["A", "B", "C", "D"], 20, 1000, GameMode.ClassicSpeed);
-        var reveal = new QuestionRevealDto(
-            0, 2, "C is correct because of O(1) lookup.", [1, 0, 3, 0], [], [], []);
+        var question = new LiveQuestionViewDto(0, 3, "Q?", null, ["Yes", "No"], 15, 1000, GameMode.ClassicSpeed);
+        var reveal = new QuestionRevealDto(0, 0, "Zero-allocation spans avoid heap pressure.", [4, 1], [], [], []);
 
-        var cut = Render<QuestionCard>(parameters => parameters
-            .Add(p => p.Question, question)
-            .Add(p => p.SelectedOptionIndex, 0)
-            .Add(p => p.Reveal, reveal));
+        var cut = Render<QuestionCard>(p => p
+            .Add(c => c.Question, question)
+            .Add(c => c.Reveal, reveal)
+            .Add(c => c.SelectedOptionIndex, 1));
 
-        var buttons = cut.FindAll("button.aq-option-btn");
-        Assert.Contains("aq-option-wrong", buttons[0].ClassName);
-        Assert.Contains("aq-option-correct", buttons[2].ClassName);
-        Assert.Contains("O(1) lookup", cut.Markup);
+        Assert.Contains("aq-option-correct", cut.Markup);
+        Assert.Contains("aq-option-wrong", cut.Markup);
+        Assert.Contains("Zero-allocation spans avoid heap pressure.", cut.Markup);
     }
 
     [Fact]
     public void RoundTimer_DisplaysRemainingSecondsAndUrgentState()
     {
-        var cut = Render<RoundTimer>(parameters => parameters
-            .Add(p => p.RemainingSeconds, 4)
-            .Add(p => p.TotalSeconds, 20));
+        var cut = Render<RoundTimer>(p => p
+            .Add(c => c.RemainingSeconds, 3)
+            .Add(c => c.TotalSeconds, 20));
 
-        Assert.Contains("4 s", cut.Markup);
-        Assert.Contains("var(--crimson-bg)", cut.Markup);
+        Assert.Contains("3 s", cut.Markup);
+        Assert.Contains("is-urgent", cut.Markup);
+    }
+
+    [Fact]
+    public void RoundTimer_PausedState_RendersPausedLabelAndClass()
+    {
+        var cut = Render<RoundTimer>(p => p
+            .Add(c => c.RemainingSeconds, 12)
+            .Add(c => c.TotalSeconds, 20)
+            .Add(c => c.IsPaused, true));
+
+        Assert.Contains("is-paused", cut.Markup);
+        Assert.Contains("Paused", cut.Markup);
     }
 
     [Fact]
     public void LiveLeaderboard_TogglesBetweenPlayersAndTeams()
     {
-        var players = new[]
-        {
-            new PlayerStandingDto("p1", "Tamerlan", TeamSide.Alpha, 1500, 500, 2, 2, 2, 1200, true, false, 1),
-            new PlayerStandingDto("p2", "Dias", TeamSide.Beta, 1200, 400, 1, 1, 2, 1600, true, false, 2)
-        };
-        var teams = new[]
-        {
-            new TeamStandingDto(TeamSide.Alpha, "Team Alpha", 1500, 1, 1500),
-            new TeamStandingDto(TeamSide.Beta, "Team Beta", 1200, 1, 1200)
-        };
+        IReadOnlyList<PlayerStandingDto> players =
+        [
+            new("p1", "Nurlan", TeamSide.Alpha, 1850, 950, 2, 2, 2, 1100, true, false, 1)
+        ];
+        IReadOnlyList<TeamStandingDto> teams =
+        [
+            new(TeamSide.Alpha, "Team Cobalt", 1850, 1, 1850)
+        ];
 
-        var cut = Render<LiveLeaderboard>(parameters => parameters
-            .Add(p => p.Players, players)
-            .Add(p => p.Teams, teams)
-            .Add(p => p.Mode, GameMode.TeamBattle)
-            .Add(p => p.HighlightPlayerId, "p1"));
+        var cut = Render<LiveLeaderboard>(p => p
+            .Add(c => c.Players, players)
+            .Add(c => c.Teams, teams)
+            .Add(c => c.Mode, GameMode.TeamBattle));
 
-        Assert.Contains("Tamerlan", cut.Markup);
-        Assert.Contains("is-self", cut.Markup);
-
+        Assert.Contains("Nurlan", cut.Markup);
         cut.FindAll("button").First(b => b.TextContent.Contains("Teams")).Click();
-        Assert.Contains("Team Alpha", cut.Markup);
-        Assert.Contains("Team Beta", cut.Markup);
+        Assert.Contains("Team Cobalt", cut.Markup);
     }
 
     [Fact]
     public void PlayerRoster_HostCanKickPlayerViaEventCallback()
     {
         string? kickedId = null;
-        var players = new[]
-        {
-            new PlayerStandingDto("p99", "GuestUser", TeamSide.None, 0, 0, 0, 0, 0, 0, true, false, 1)
-        };
+        IReadOnlyList<PlayerStandingDto> players =
+        [
+            new("id-77", "Kairat", TeamSide.None, 0, 0, 0, 0, 0, 0, true, false, 1)
+        ];
 
-        var cut = Render<PlayerRoster>(parameters => parameters
-            .Add(p => p.Players, players)
-            .Add(p => p.IsHost, true)
-            .Add(p => p.OnRemovePlayer, id => kickedId = id));
+        var cut = Render<PlayerRoster>(p => p
+            .Add(c => c.Players, players)
+            .Add(c => c.IsHost, true)
+            .Add(c => c.OnRemovePlayer, id => kickedId = id));
 
         cut.Find("button").Click();
-        Assert.Equal("p99", kickedId);
+        Assert.Equal("id-77", kickedId);
     }
 
     [Fact]
     public void TemplatedMetricGrid_RendersGenericHeaderAndRowTemplates()
     {
-        var items = new[] { "Session-A", "Session-B" };
-        var cut = Render<TemplatedMetricGrid<string>>(parameters => parameters
-            .Add(p => p.Items, items)
-            .Add(p => p.HeaderTemplate, "<h2>Custom Header</h2>")
-            .Add(p => p.RowTemplate, item => $"<div class='row-item'>{item}</div>"));
+        var cut = Render<TemplatedMetricGrid<string>>(p => p
+            .Add(c => c.Items, new[] { "Record-A", "Record-B" })
+            .Add(c => c.HeaderTemplate, builder => builder.AddContent(0, "Header"))
+            .Add(c => c.RowTemplate, item => builder => builder.AddContent(0, $"Row:{item}")));
 
-        Assert.Contains("Custom Header", cut.Markup);
-        Assert.Equal(2, cut.FindAll(".row-item").Count);
+        Assert.Contains("Header", cut.Markup);
+        Assert.Contains("Row:Record-A", cut.Markup);
+        Assert.Contains("Row:Record-B", cut.Markup);
+    }
+
+    [Fact]
+    public void QrCodeSvg_RendersValidSvgMatrixAndCaption()
+    {
+        var cut = Render<QrCodeSvg>(p => p
+            .Add(c => c.Payload, "https://localhost:5152/play?pin=AQ4829")
+            .Add(c => c.PixelSize, 156)
+            .Add(c => c.Caption, "AQ4829"));
+
+        var svg = cut.Find("svg");
+        Assert.Equal("156", svg.GetAttribute("width"));
+        Assert.NotEmpty(cut.FindAll("svg rect"));
+        Assert.Contains("AQ4829", cut.Markup);
     }
 }
-

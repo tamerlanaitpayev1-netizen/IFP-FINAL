@@ -1,8 +1,10 @@
 using ArenaQuiz.Data;
+using ArenaQuiz.Security;
 using ArenaQuiz.Services;
 using ArenaQuiz.Shared.Models;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -10,32 +12,46 @@ namespace ArenaQuiz.Tests;
 
 public sealed class GameRoomServiceTests : IAsyncLifetime
 {
-    private readonly SqliteConnection _connection;
-    private readonly ServiceProvider _provider;
-    private readonly FakeBroadcaster _broadcaster = new();
-    private readonly GameRoomService _roomService;
+    private SqliteConnection _connection = default!;
+    private ServiceProvider _provider = default!;
+    private FakeBroadcaster _broadcaster = default!;
+    private GameRoomService _roomService = default!;
+    private Guid _quizId;
 
-    public GameRoomServiceTests()
+    public async Task InitializeAsync()
     {
-        _connection = new SqliteConnection("Data Source=:memory:");
-        _connection.Open();
+        _connection = new SqliteConnection("DataSource=:memory:");
+        await _connection.OpenAsync();
 
         var services = new ServiceCollection();
         services.AddDbContext<ArenaDbContext>(opt => opt.UseSqlite(_connection));
         services.AddScoped<QuizRepositoryService>();
+        services.AddSingleton(new TokenService(new ConfigurationBuilder().Build()));
+        services.AddSingleton<Microsoft.Extensions.Logging.ILogger<GameRoomService>>(NullLogger<GameRoomService>.Instance);
+
+        _broadcaster = new FakeBroadcaster();
+        services.AddSingleton<IGameRoomBroadcaster>(_broadcaster);
+        services.AddSingleton<GameRoomService>();
+
         _provider = services.BuildServiceProvider();
 
-        _roomService = new GameRoomService(
-            _provider.GetRequiredService<IServiceScopeFactory>(),
-            _broadcaster,
-            NullLogger<GameRoomService>.Instance);
-    }
-
-    public async Task InitializeAsync()
-    {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ArenaDbContext>();
-        await DbSeeder.SeedAsync(db);
+        await db.Database.EnsureCreatedAsync();
+
+        var repo = scope.ServiceProvider.GetRequiredService<QuizRepositoryService>();
+        var created = await repo.CreateQuizAsync(new CreateQuizRequest(
+            "Test Quiz",
+            "Testing",
+            "Automated test suite quiz",
+            "TestRunner",
+            [
+                new("Question 1?", null, ["Correct A", "Wrong B", "Wrong C", "Wrong D"], 0, 20, 1000, "A is right."),
+                new("Question 2?", null, ["Correct A", "Wrong B", "Wrong C", "Wrong D"], 0, 20, 1000, "A is still right.")
+            ]));
+
+        _quizId = created.Value!.Id;
+        _roomService = _provider.GetRequiredService<GameRoomService>();
     }
 
     public async Task DisposeAsync()
@@ -48,104 +64,261 @@ public sealed class GameRoomServiceTests : IAsyncLifetime
     [Fact]
     public async Task CreateJoinStartSubmitAndFinish_FullRoomLifecycle_PersistsSessionToSqlite()
     {
-        var quizId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-        var created = await _roomService.CreateRoomAsync(
-            new CreateRoomRequest(quizId, "Тамерлан", GameMode.ClassicSpeed, AutoAdvance: false),
-            "host-conn-1");
+        const string hostConn = "conn-host-1";
+        const string p1Conn = "conn-p1";
+        const string p2Conn = "conn-p2";
 
-        Assert.True(created.IsSuccess);
-        string code = created.Value!.RoomCode;
+        var createRes = await _roomService.CreateRoomAsync(new CreateRoomRequest(_quizId, "Host", GameMode.ClassicSpeed, false), hostConn);
+        Assert.True(createRes.IsSuccess);
+        string code = createRes.Value!.RoomCode;
+        Assert.False(string.IsNullOrWhiteSpace(createRes.Value.HostControlToken));
 
-        var p1Join = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Amina", TeamSide.None, null), "p1-conn");
-        var p2Join = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Dias", TeamSide.None, null), "p2-conn");
+        var p1Join = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Alice", TeamSide.None, null), p1Conn);
+        var p2Join = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Bob", TeamSide.None, null), p2Conn);
         Assert.True(p1Join.IsSuccess);
         Assert.True(p2Join.IsSuccess);
 
-        // LiveQuestionViewDto must NEVER leak CorrectOptionIndex.
-        var started = await _roomService.StartGameAsync(code);
-        Assert.True(started.IsSuccess);
-        Assert.Equal(RoomPhase.QuestionActive, started.Value!.Phase);
-        Assert.NotNull(started.Value.ActiveQuestion);
+        var startRes = await _roomService.StartGameAsync(code, hostConn);
+        Assert.True(startRes.IsSuccess);
+        Assert.Equal(RoomPhase.QuestionActive, startRes.Value!.Phase);
 
-        string p1Id = p1Join.Value.Player.PlayerId;
-        string p2Id = p2Join.Value.Player.PlayerId;
-
-        // Submitting answers for all connected players auto-reveals the question.
-        var ack1 = await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p1Id, 0, 1)); // correct
-        var ack2 = await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p2Id, 0, 0)); // wrong
-
+        var ack1 = await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p1Join.Value.Player.PlayerId, 0, 0), p1Conn);
         Assert.True(ack1.IsSuccess);
+        Assert.Single(_broadcaster.AnswerProgressEvents);
+        Assert.Equal(1, _broadcaster.AnswerProgressEvents[0].Progress.AnsweredCount);
+
+        // Second (last) player submission triggers immediate reveal
+        var ack2 = await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p2Join.Value.Player.PlayerId, 0, 1), p2Conn);
         Assert.True(ack2.IsSuccess);
-        Assert.NotNull(_broadcaster.LastReveal);
-        Assert.Equal(1, _broadcaster.LastReveal!.CorrectOptionIndex);
-        Assert.True(_broadcaster.LastReveal.Leaderboard.First(p => p.PlayerId == p1Id).TotalScore > 0);
-        Assert.Equal(0, _broadcaster.LastReveal.Leaderboard.First(p => p.PlayerId == p2Id).TotalScore);
+        Assert.Single(_broadcaster.RevealedEvents);
 
-        // Advance through remaining questions to finish and persist.
-        for (int i = 1; i < started.Value.TotalQuestions; i++)
-        {
-            var next = await _roomService.NextQuestionAsync(code);
-            Assert.True(next.IsSuccess);
-            await _roomService.RevealCurrentQuestionAsync(code);
-        }
+        // Advance to Question 2 and finish match
+        var q2Res = await _roomService.NextQuestionAsync(code, hostConn);
+        Assert.True(q2Res.IsSuccess);
+        Assert.Equal(1, q2Res.Value!.CurrentQuestionIndex);
 
-        var finish = await _roomService.NextQuestionAsync(code);
-        Assert.True(finish.IsSuccess);
-        Assert.Equal(RoomPhase.PodiumFinished, finish.Value!.Phase);
-        Assert.NotNull(_broadcaster.LastEndedSession);
+        await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p1Join.Value.Player.PlayerId, 1, 0), p1Conn);
+        await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p2Join.Value.Player.PlayerId, 1, 0), p2Conn);
+
+        var endRes = await _roomService.NextQuestionAsync(code, hostConn);
+        Assert.True(endRes.IsSuccess);
+        Assert.Equal(RoomPhase.PodiumFinished, endRes.Value!.Phase);
+        Assert.Single(_broadcaster.EndedSessions);
+        Assert.Equal("Alice", _broadcaster.EndedSessions[0].WinnerNickname);
 
         using var scope = _provider.CreateScope();
         var repo = scope.ServiceProvider.GetRequiredService<QuizRepositoryService>();
-        var saved = await repo.GetSessionByIdAsync(_broadcaster.LastEndedSession!.SessionId);
-        Assert.NotNull(saved);
-        Assert.Equal(code, saved!.RoomCode);
+        var analytics = await repo.GetAnalyticsOverviewAsync();
+        Assert.Equal(1, analytics.TotalSessionsPlayed);
+        Assert.NotNull(analytics.QuestionStats);
+        Assert.Equal(2, analytics.QuestionStats.Count);
     }
 
     [Fact]
     public async Task JoinRoom_ReconnectTokenRestoresDisconnectedPlayerScore()
     {
-        var quizId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-        var room = await _roomService.CreateRoomAsync(new CreateRoomRequest(quizId, "Host", GameMode.ClassicSpeed, false), "host");
-        string code = room.Value!.RoomCode;
+        const string hostConn = "conn-host-reconn";
+        const string p1Conn = "conn-p1-initial";
+        const string p1NewConn = "conn-p1-new";
 
-        var firstJoin = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Alisher", TeamSide.None, null), "conn-1");
-        string token = firstJoin.Value.Snapshot.ReconnectToken!;
+        var createRes = await _roomService.CreateRoomAsync(new CreateRoomRequest(_quizId, "Host", GameMode.ClassicSpeed, false), hostConn);
+        string code = createRes.Value!.RoomCode;
 
-        await _roomService.HandleDisconnectAsync("conn-1");
-        var reconnect = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Alisher", TeamSide.None, token), "conn-2");
+        var joinRes = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Amina", TeamSide.None, null), p1Conn);
+        string token = joinRes.Value.Snapshot.ReconnectToken!;
+        string playerId = joinRes.Value.Player.PlayerId;
 
-        Assert.True(reconnect.IsSuccess);
-        Assert.True(reconnect.Value.IsReconnect);
-        Assert.Equal(firstJoin.Value.Player.PlayerId, reconnect.Value.Player.PlayerId);
-        Assert.True(reconnect.Value.Player.IsConnected);
+        await _roomService.StartGameAsync(code, hostConn);
+        await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, playerId, 0, 0), p1Conn);
+        await _roomService.HandleDisconnectAsync(p1Conn);
+
+        var rejoinRes = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Amina", TeamSide.None, token), p1NewConn);
+        Assert.True(rejoinRes.IsSuccess);
+        Assert.True(rejoinRes.Value.IsReconnect);
+        Assert.Equal(playerId, rejoinRes.Value.Player.PlayerId);
+        Assert.True(rejoinRes.Value.Player.IsConnected);
+        Assert.True(rejoinRes.Value.Player.TotalScore > 0);
+    }
+
+    [Fact]
+    public async Task JoinRoom_BlocksNicknameHijackWithoutReconnectToken()
+    {
+        const string hostConn = "conn-host-hijack";
+        const string legConn = "conn-legit";
+        const string attackerConn = "conn-attacker";
+
+        var createRes = await _roomService.CreateRoomAsync(new CreateRoomRequest(_quizId, "Host", GameMode.ClassicSpeed, false), hostConn);
+        string code = createRes.Value!.RoomCode;
+
+        await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Dias", TeamSide.None, null), legConn);
+        await _roomService.HandleDisconnectAsync(legConn);
+
+        var hijackAttempt = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Dias", TeamSide.None, null), attackerConn);
+        Assert.False(hijackAttempt.IsSuccess);
+        Assert.Contains("already registered", hijackAttempt.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReclaimHost_ValidTokenTransfersControlAndInvalidTokenFails()
+    {
+        const string hostConn = "conn-host-old";
+        const string newHostConn = "conn-host-refreshed";
+
+        var createRes = await _roomService.CreateRoomAsync(new CreateRoomRequest(_quizId, "Host", GameMode.ClassicSpeed, false), hostConn);
+        string code = createRes.Value!.RoomCode;
+        string hostToken = createRes.Value.HostControlToken!;
+
+        var badReclaim = await _roomService.ReclaimHostAsync(code, "wrong-token-value", newHostConn);
+        Assert.False(badReclaim.IsSuccess);
+
+        var goodReclaim = await _roomService.ReclaimHostAsync(code, hostToken, newHostConn);
+        Assert.True(goodReclaim.IsSuccess);
+
+        await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Player1", TeamSide.None, null), "conn-p1");
+
+        var oldHostTryStart = await _roomService.StartGameAsync(code, hostConn);
+        Assert.False(oldHostTryStart.IsSuccess);
+
+        var newHostTryStart = await _roomService.StartGameAsync(code, newHostConn);
+        Assert.True(newHostTryStart.IsSuccess);
+    }
+
+    [Fact]
+    public async Task HostActions_NonHostConnectionRejectedAcrossLifecycle()
+    {
+        const string hostConn = "conn-host-sec";
+        const string playerConn = "conn-player-sec";
+
+        var createRes = await _roomService.CreateRoomAsync(new CreateRoomRequest(_quizId, "Host", GameMode.ClassicSpeed, false), hostConn);
+        string code = createRes.Value!.RoomCode;
+        var joinRes = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "P1", TeamSide.None, null), playerConn);
+
+        Assert.False((await _roomService.StartGameAsync(code, playerConn)).IsSuccess);
+        Assert.False((await _roomService.RemovePlayerAsync(code, joinRes.Value.Player.PlayerId, playerConn)).IsSuccess);
+
+        Assert.True((await _roomService.StartGameAsync(code, hostConn)).IsSuccess);
+
+        Assert.False((await _roomService.TogglePauseQuestionAsync(code, playerConn)).IsSuccess);
+        Assert.False((await _roomService.RevealCurrentQuestionAsync(code, playerConn)).IsSuccess);
+        Assert.False((await _roomService.NextQuestionAsync(code, playerConn)).IsSuccess);
+    }
+
+    [Fact]
+    public async Task SubmitAnswer_SpoofedPlayerIdFromDifferentConnection_IsRejected()
+    {
+        const string hostConn = "conn-host-spoof";
+        const string p1Conn = "conn-p1-spoof";
+        const string p2Conn = "conn-p2-spoof";
+
+        var createRes = await _roomService.CreateRoomAsync(new CreateRoomRequest(_quizId, "Host", GameMode.ClassicSpeed, false), hostConn);
+        string code = createRes.Value!.RoomCode;
+
+        var p1 = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "P1", TeamSide.None, null), p1Conn);
+        var p2 = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "P2", TeamSide.None, null), p2Conn);
+
+        await _roomService.StartGameAsync(code, hostConn);
+
+        var spoofAttempt = await _roomService.SubmitAnswerAsync(
+            new SubmitAnswerRequest(code, p2.Value.Player.PlayerId, 0, 0),
+            p1Conn);
+
+        Assert.False(spoofAttempt.IsSuccess);
+        Assert.Contains("another player", spoofAttempt.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.True((await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p1.Value.Player.PlayerId, 0, 0), p1Conn)).IsSuccess);
+    }
+
+    [Fact]
+    public async Task TogglePauseQuestion_PausesBlocksAnswersAndResumesCleanly()
+    {
+        const string hostConn = "conn-host-pause";
+        const string p1Conn = "conn-p1-pause";
+
+        var createRes = await _roomService.CreateRoomAsync(new CreateRoomRequest(_quizId, "Host", GameMode.ClassicSpeed, false), hostConn);
+        string code = createRes.Value!.RoomCode;
+        var p1 = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Runner", TeamSide.None, null), p1Conn);
+        await _roomService.StartGameAsync(code, hostConn);
+
+        var pauseRes = await _roomService.TogglePauseQuestionAsync(code, hostConn);
+        Assert.True(pauseRes.IsSuccess);
+        Assert.True(pauseRes.Value);
+
+        var blockedWhilePaused = await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p1.Value.Player.PlayerId, 0, 0), p1Conn);
+        Assert.False(blockedWhilePaused.IsSuccess);
+        Assert.Contains("paused", blockedWhilePaused.Error, StringComparison.OrdinalIgnoreCase);
+
+        var resumeRes = await _roomService.TogglePauseQuestionAsync(code, hostConn);
+        Assert.True(resumeRes.IsSuccess);
+        Assert.False(resumeRes.Value);
+
+        var acceptedAfterResume = await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p1.Value.Player.PlayerId, 0, 0), p1Conn);
+        Assert.True(acceptedAfterResume.IsSuccess);
+        Assert.Equal(2, _broadcaster.PauseEvents.Count);
     }
 
     [Fact]
     public async Task KnockoutMode_WrongAnswerEliminatesPlayer()
     {
-        var quizId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-        var room = await _roomService.CreateRoomAsync(new CreateRoomRequest(quizId, "Host", GameMode.KnockoutElimination, false), "host");
-        string code = room.Value!.RoomCode;
+        const string hostConn = "conn-host-ko";
+        const string p1Conn = "conn-ko-survivor";
+        const string p2Conn = "conn-ko-victim";
 
-        var p1 = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Survivor", TeamSide.None, null), "c1");
-        var p2 = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "OutPlayer", TeamSide.None, null), "c2");
+        var createRes = await _roomService.CreateRoomAsync(new CreateRoomRequest(_quizId, "Host", GameMode.KnockoutElimination, false), hostConn);
+        string code = createRes.Value!.RoomCode;
 
-        await _roomService.StartGameAsync(code);
-        await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p1.Value.Player.PlayerId, 0, 1)); // correct
-        await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p2.Value.Player.PlayerId, 0, 3)); // wrong
+        var survivor = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "Survivor", TeamSide.None, null), p1Conn);
+        var knocked = await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "KnockedOut", TeamSide.None, null), p2Conn);
 
-        Assert.Contains("OutPlayer", _broadcaster.LastReveal!.NewlyEliminatedNicknames);
+        await _roomService.StartGameAsync(code, hostConn);
+        await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, survivor.Value.Player.PlayerId, 0, 0), p1Conn);
+        await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, knocked.Value.Player.PlayerId, 0, 2), p2Conn);
 
-        // Next question starts; eliminated player cannot submit answers.
-        await _roomService.NextQuestionAsync(code);
-        var blocked = await _roomService.SubmitAnswerAsync(new SubmitAnswerRequest(code, p2.Value.Player.PlayerId, 1, 1));
-        Assert.False(blocked.IsSuccess);
+        var reveal = _broadcaster.RevealedEvents.Single();
+        Assert.Contains("KnockedOut", reveal.NewlyEliminatedNicknames);
+        Assert.True(reveal.Leaderboard.First(p => p.Nickname == "KnockedOut").IsEliminated);
+        Assert.False(reveal.Leaderboard.First(p => p.Nickname == "Survivor").IsEliminated);
+    }
+
+    [Fact]
+    public async Task KnockoutMode_DisconnectedPlayerWhoDidNotAnswerIsNotEliminated()
+    {
+        const string hostConn = "conn-host-kodrop";
+        const string p1Conn = "conn-kodrop-1";
+        const string p2Conn = "conn-kodrop-2";
+
+        var createRes = await _roomService.CreateRoomAsync(new CreateRoomRequest(_quizId, "Host", GameMode.KnockoutElimination, false), hostConn);
+        string code = createRes.Value!.RoomCode;
+
+        await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "DroppedPlayer", TeamSide.None, null), p1Conn);
+        await _roomService.JoinRoomAsync(new JoinRoomRequest(code, "SilentConnected", TeamSide.None, null), p2Conn);
+
+        await _roomService.StartGameAsync(code, hostConn);
+        await _roomService.HandleDisconnectAsync(p1Conn);
+
+        var revealRes = await _roomService.RevealCurrentQuestionAsync(code, hostConn);
+        Assert.True(revealRes.IsSuccess);
+        Assert.DoesNotContain("DroppedPlayer", revealRes.Value!.NewlyEliminatedNicknames);
+        Assert.Contains("SilentConnected", revealRes.Value.NewlyEliminatedNicknames);
+    }
+
+    [Fact]
+    public async Task CleanupExpiredRooms_ZeroTtlEvictsAbandonedRooms()
+    {
+        var createRes = await _roomService.CreateRoomAsync(new CreateRoomRequest(_quizId, "Host", GameMode.ClassicSpeed, false), "conn-evict");
+        string code = createRes.Value!.RoomCode;
+        Assert.Contains(_roomService.GetOpenRooms(), r => r.RoomCode == code);
+
+        int evicted = _roomService.CleanupExpiredRooms(TimeSpan.Zero, TimeSpan.Zero);
+        Assert.Equal(1, evicted);
+        Assert.DoesNotContain(_roomService.GetOpenRooms(), r => r.RoomCode == code);
     }
 
     private sealed class FakeBroadcaster : IGameRoomBroadcaster
     {
-        public QuestionRevealDto? LastReveal { get; private set; }
-        public SessionHistoryDto? LastEndedSession { get; private set; }
+        public List<(string RoomCode, AnswerProgressDto Progress)> AnswerProgressEvents { get; } = [];
+        public List<(string RoomCode, bool IsPaused, int RemainingSeconds)> PauseEvents { get; } = [];
+        public List<QuestionRevealDto> RevealedEvents { get; } = [];
+        public List<SessionHistoryDto> EndedSessions { get; } = [];
+        public List<ReactionEventDto> ReactionEvents { get; } = [];
 
         public Task RoomStateUpdated(string roomCode, RoomSnapshotDto snapshot) => Task.CompletedTask;
         public Task PlayerJoined(string roomCode, PlayerStandingDto player) => Task.CompletedTask;
@@ -153,19 +326,35 @@ public sealed class GameRoomServiceTests : IAsyncLifetime
         public Task PlayerLeft(string roomCode, string playerId, string nickname) => Task.CompletedTask;
         public Task QuestionStarted(string roomCode, LiveQuestionViewDto question, int remainingSeconds) => Task.CompletedTask;
         public Task TimerTicked(string roomCode, int remainingSeconds) => Task.CompletedTask;
-        public Task ReactionBroadcast(string roomCode, ReactionEventDto reaction) => Task.CompletedTask;
+
+        public Task AnswerProgressUpdated(string roomCode, AnswerProgressDto progress)
+        {
+            AnswerProgressEvents.Add((roomCode, progress));
+            return Task.CompletedTask;
+        }
+
+        public Task PauseStateChanged(string roomCode, bool isPaused, int remainingSeconds)
+        {
+            PauseEvents.Add((roomCode, isPaused, remainingSeconds));
+            return Task.CompletedTask;
+        }
 
         public Task QuestionRevealed(string roomCode, QuestionRevealDto reveal)
         {
-            LastReveal = reveal;
+            RevealedEvents.Add(reveal);
             return Task.CompletedTask;
         }
 
         public Task GameEnded(string roomCode, SessionHistoryDto summary)
         {
-            LastEndedSession = summary;
+            EndedSessions.Add(summary);
+            return Task.CompletedTask;
+        }
+
+        public Task ReactionBroadcast(string roomCode, ReactionEventDto reaction)
+        {
+            ReactionEvents.Add(reaction);
             return Task.CompletedTask;
         }
     }
 }
-

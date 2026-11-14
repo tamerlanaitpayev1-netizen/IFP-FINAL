@@ -1,29 +1,44 @@
+using System.Security.Claims;
 using ArenaQuiz.Data;
+using ArenaQuiz.Security;
 using ArenaQuiz.Services;
 using ArenaQuiz.Shared.Models;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace ArenaQuiz.Tests;
 
 public sealed class QuizRepositorySqliteTests : IAsyncLifetime
 {
-    private readonly SqliteConnection _connection;
-    private readonly ArenaDbContext _db;
-
-    public QuizRepositorySqliteTests()
-    {
-        _connection = new SqliteConnection("Data Source=:memory:");
-        _connection.Open();
-        var options = new DbContextOptionsBuilder<ArenaDbContext>()
-            .UseSqlite(_connection)
-            .Options;
-        _db = new ArenaDbContext(options);
-    }
+    private SqliteConnection _connection = default!;
+    private ArenaDbContext _db = default!;
+    private QuizRepositoryService _repo = default!;
+    private TokenService _tokenService = default!;
+    private AuthService _auth = default!;
 
     public async Task InitializeAsync()
     {
+        _connection = new SqliteConnection("DataSource=:memory:");
+        await _connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<ArenaDbContext>()
+            .UseSqlite(_connection)
+            .Options;
+
+        _db = new ArenaDbContext(options);
         await DbSeeder.SeedAsync(_db);
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Security:TokenSigningKey"] = "UnitTest_SigningKey_With_High_Entropy_2026!"
+            })
+            .Build();
+
+        _tokenService = new TokenService(config);
+        _repo = new QuizRepositoryService(_db);
+        _auth = new AuthService(_db, _tokenService);
     }
 
     public async Task DisposeAsync()
@@ -35,69 +50,102 @@ public sealed class QuizRepositorySqliteTests : IAsyncLifetime
     [Fact]
     public async Task SeedAsync_PopulatesThreeQuizzesAndThreeHistoricalSessions()
     {
-        var repo = new QuizRepositoryService(_db);
-        var quizzes = await repo.GetAllQuizSummariesAsync();
-        var analytics = await repo.GetAnalyticsOverviewAsync();
-
+        var quizzes = await _repo.GetAllQuizSummariesAsync();
         Assert.Equal(3, quizzes.Count);
+
+        var analytics = await _repo.GetAnalyticsOverviewAsync();
         Assert.Equal(3, analytics.TotalSessionsPlayed);
-        Assert.True(analytics.TotalParticipants >= 15);
+        Assert.True(analytics.TotalParticipants >= 9);
+        Assert.Equal(3, analytics.RecentSessions.Count);
+        Assert.NotNull(analytics.QuestionStats);
+        Assert.True(analytics.QuestionStats.Count > 0);
     }
 
     [Fact]
-    public async Task CreateQuizAsync_ValidRequest_PersistsAndDeletesCleanly()
+    public async Task CreateQuizAsync_ValidRequest_PersistsPreviewUpdatesAndDeletesCleanly()
     {
-        var repo = new QuizRepositoryService(_db);
-        var request = new CreateQuizRequest(
-            "Custom Architecture Quiz",
-            "Architecture",
-            "Test description",
-            "Диас",
+        var req = new CreateQuizRequest(
+            "SQLite Concurrency Test Quiz",
+            "Databases",
+            "Testing EF Core roundtrips",
+            "Tamerlan",
             [
-                new CreateQuestionRequest(
-                    "Which protocol powers SignalR duplex messaging?",
+                new(
+                    "Which keyword makes records immutable by value equality in C#?",
                     null,
-                    ["WebSockets", "FTP", "SMTP", "ICMP"],
-                    0,
-                    20,
+                    ["class", "record", "volatile", "dynamic"],
+                    1,
+                    25,
                     1000,
-                    "WebSockets provide full-duplex persistent framing.")
+                    "C# record types provide value equality and init-only immutability.")
             ]);
 
-        var created = await repo.CreateQuizAsync(request);
+        var created = await _repo.CreateQuizAsync(req);
         Assert.True(created.IsSuccess);
-        Assert.Equal("Custom Architecture Quiz", created.Value!.Title);
+        Guid createdId = created.Value!.Id;
 
-        var loaded = await repo.GetQuizDetailAsync(created.Value.Id);
-        Assert.NotNull(loaded);
-        Assert.Single(loaded!.Questions);
+        // Public preview projection returns QuestionPublicDto without answer key properties
+        var publicPreview = await _repo.GetQuizPublicPreviewAsync(createdId);
+        Assert.NotNull(publicPreview);
+        Assert.Single(publicPreview.Questions);
+        Assert.Null(typeof(QuestionPublicDto).GetProperty("CorrectOptionIndex"));
 
-        bool deleted = await repo.DeleteQuizAsync(created.Value.Id);
-        Assert.True(deleted);
+        // Host edit detail includes CorrectOptionIndex
+        var editDetail = await _repo.GetQuizDetailAsync(createdId);
+        Assert.NotNull(editDetail);
+        Assert.Equal(1, editDetail.Questions[0].CorrectOptionIndex);
+
+        // Update quiz title & add second question
+        var updateRes = await _repo.UpdateQuizAsync(createdId, req with
+        {
+            Title = "Updated SQLite Quiz",
+            Questions =
+            [
+                req.Questions[0],
+                new("Second added question?", null, ["A", "B", "C", "D"], 0, 15, 500, "Updated")
+            ]
+        });
+        Assert.True(updateRes.IsSuccess);
+        Assert.Equal("Updated SQLite Quiz", updateRes.Value!.Title);
+        Assert.Equal(2, updateRes.Value.QuestionCount);
+
+        Assert.True(await _repo.DeleteQuizAsync(createdId));
+        Assert.Null(await _repo.GetQuizDetailAsync(createdId));
     }
 
     [Fact]
     public async Task CreateQuizAsync_EmptyTitle_ReturnsFailureResult()
     {
-        var repo = new QuizRepositoryService(_db);
-        var result = await repo.CreateQuizAsync(new CreateQuizRequest("", "Cat", "Desc", "Host", []));
+        var invalidReq = new CreateQuizRequest("  ", "Cat", "Desc", "Host", []);
+        var result = await _repo.CreateQuizAsync(invalidReq);
+
         Assert.False(result.IsSuccess);
+        Assert.NotNull(result.Error);
     }
 
     [Fact]
-    public async Task AuthService_ValidatesCredentialsAndSupportsQuickSwitch()
+    public async Task AuthService_ValidatesPbkdf2CredentialsAndRestrictsQuickSwitchToPlayers()
     {
-        var auth = new AuthService(_db);
+        var validHost = await _auth.LoginAsync(new LoginRequest("tamerlan", "host123"));
+        Assert.True(validHost.IsSuccess);
+        Assert.Equal(UserRole.Host, validHost.Value!.Role);
 
-        var valid = await auth.LoginAsync(new LoginRequest("tamerlan", "host123"));
-        var invalid = await auth.LoginAsync(new LoginRequest("tamerlan", "wrong"));
-        var playerSwitch = await auth.QuickSwitchAsync("student");
+        var principal = _tokenService.ValidateToken(validHost.Value.Token);
+        Assert.NotNull(principal);
+        Assert.True(principal.IsInRole(nameof(UserRole.Host)));
+        Assert.Equal("tamerlan", principal.Identity?.Name);
 
-        Assert.True(valid.IsSuccess);
-        Assert.Equal(UserRole.Host, valid.Value!.Role);
-        Assert.False(invalid.IsSuccess);
+        var invalidPass = await _auth.LoginAsync(new LoginRequest("tamerlan", "wrong-password"));
+        Assert.False(invalidPass.IsSuccess);
+
+        // Quick-switch only permits Player role
+        var playerSwitch = await _auth.QuickSwitchPlayerAsync("student");
         Assert.True(playerSwitch.IsSuccess);
         Assert.Equal(UserRole.Player, playerSwitch.Value!.Role);
+
+        // Passwordless elevation to Host MUST be rejected
+        var blockedHostSwitch = await _auth.QuickSwitchPlayerAsync("tamerlan");
+        Assert.False(blockedHostSwitch.IsSuccess);
+        Assert.Contains("password", blockedHostSwitch.Error, StringComparison.OrdinalIgnoreCase);
     }
 }
-

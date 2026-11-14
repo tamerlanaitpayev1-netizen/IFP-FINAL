@@ -1,6 +1,6 @@
 # ArenaQuiz — Real-Time Multiplayer Quiz Platform (.NET 10 Blazor WebAssembly + SignalR)
 
-**ArenaQuiz** — кроссплатформенное веб-приложение для проведения интерактивных викторин и академических квизов в реальном времени с защитой от читерства, тремя игровыми режимами (`ClassicSpeed`, `TeamBattle`, `KnockoutElimination`), сохранением истории в SQLite, ролевой моделью доступа (RBAC) и экспортом отчётов в CSV.
+**ArenaQuiz** — кроссплатформенное веб-приложение (PWA) для проведения интерактивных викторин и академических квизов в реальном времени с серверной защитой от читерства, ролевой безопасностью (PBKDF2 + HMAC-SHA256 RBAC), тремя игровыми режимами (`ClassicSpeed`, `TeamBattle`, `KnockoutElimination`), аналитикой сложных вопросов, режимом проектора с SVG QR-кодом и экспортом результатов в RFC-4180 CSV.
 
 ---
 
@@ -8,9 +8,9 @@
 
 | Участник | Роль | Зона ответственности |
 |---|---|---|
-| **Тамерлан** (Student A) | Backend & Real-Time Architect | `GameHub` (SignalR), `GameRoomService` (многокомнатный state, серверные таймеры, защита от читерства), `ArenaDbContext` + `DbSeeder` (EF Core + SQLite), `AuthService` (RBAC), REST API контроллеры, серверные интеграционные и unit-тесты (`xUnit`). |
-| **Диас** (Student B) | Frontend & Blazor WASM Engineer | Страницы (`Home`, `HostStudio`, `PlayArena`, `HistoryAnalytics`, `AccessControl`), переиспользуемые и шаблонные компоненты (`QuestionCard`, `RoundTimer`, `LiveLeaderboard`, `PlayerRoster`, `TemplatedMetricGrid`, `ConnectionStatusBanner`), `GameStateContainer`, `SoundService` (WebAudio API), адаптивный UI/CSS, тесты компонентов (`bUnit`). |
-| **Совместно** | Shared Core & Defense | `ArenaQuiz.Shared` (иммутабельные `record` DTO, функциональный движок `ScoreEngine`, монада `Result<T>`, контракты `IGameHubClient`/`IGameHubServer`), документация, презентация, репетиция защиты. |
+| **Тамерлан** | Backend & Real-Time Security Architect | `GameHub` (SignalR), `GameRoomService` (wall-clock таймеры, Pause/Resume, O(P) дельты `AnswerProgressDto`, привязка `HostConnectionId` и `HostControlToken`, защита от спуфинга `PlayerId` и захвата ника, `RoomCleanupHostedService`), `TokenService` (PBKDF2-SHA256 + HMAC-SHA256), `ArenaBearerAuthHandler`, `[Authorize(Roles = "Host,Admin")]`, `ArenaDbContext` + `DbSeeder` + `QuestionStatEntity`, `WebApplicationFactory` интеграционные и security-тесты (`xUnit`). |
+| **Диас** | Frontend & Blazor WASM UI/UX Engineer | Страницы (`Home`, `HostStudio`, `PlayArena`, `HistoryAnalytics`, `AccessControl`), компоненты (`QuestionCard`, `RoundTimer`, `LiveLeaderboard`, `PlayerRoster`, `TemplatedMetricGrid`, `ConnectionStatusBanner`, `QrCodeSvg`), чистый C# QR-генератор `QrCodeEncoder`, `LocalizationService` (`kk`/`ru`/`en`), `GameStateContainer` (session recovery, Dark Mode), `SoundService` (WebAudio API), PWA (`manifest.webmanifest`, `service-worker.js`), `app.css` (0 inline-стилей), тесты (`bUnit`). |
+| **Совместно** | Shared Core & Defense | `ArenaQuiz.Shared` (иммутабельные `record` DTO включая `QuizPublicPreviewDto`, движок `ScoreEngine`, монада `Result<T>`, контракты `IGameHubClient`/`IGameHubServer`), `README.md`, `docs/presentation.html`, подготовка защиты. |
 
 ---
 
@@ -18,34 +18,38 @@
 
 ```mermaid
 flowchart LR
-    subgraph Client["ArenaQuiz.Client (Blazor WebAssembly)"]
-        Pages["Pages: Home, HostStudio, PlayArena, Analytics, Auth"]
-        Components["Components: QuestionCard, RoundTimer, LiveLeaderboard, PlayerRoster, TemplatedMetricGrid"]
-        State["GameStateContainer + SoundService + QuizApiClient"]
+    subgraph Client["ArenaQuiz.Client (Blazor WebAssembly PWA)"]
+        Pages["Pages: Home, PlayArena, HostStudio (+Projector/Editor), Analytics, Auth"]
+        Components["Components: QuestionCard, RoundTimer, LiveLeaderboard, PlayerRoster, TemplatedMetricGrid, QrCodeSvg"]
+        ServicesClient["GameStateContainer + QuizApiClient (Bearer) + LocalizationService (kk/ru/en) + SoundService"]
     end
 
     subgraph Shared["ArenaQuiz.Shared (.NET 10)"]
-        DTO["Immutable Record DTOs & Result&lt;T&gt;"]
+        DTO["Immutable Records: QuizPublicPreviewDto, AnswerProgressDto, Result&lt;T&gt;"]
         Engine["Pure Functional ScoreEngine"]
         Contracts["IGameHubClient / IGameHubServer"]
     end
 
     subgraph Server["ArenaQuiz (ASP.NET Core 10)"]
+        Security["TokenService (PBKDF2 + HMAC-SHA256) + ArenaBearerAuthHandler + RBAC"]
         Hub["SignalR GameHub (/gamehub)"]
-        RoomSvc["Singleton GameRoomService (ConcurrentDictionary + Server Timers)"]
-        Controllers["REST API: Quizzes, Sessions, Rooms, Auth"]
+        RoomSvc["Singleton GameRoomService (Wall-Clock Timers + Connection Binding)"]
+        Cleanup["RoomCleanupHostedService (BackgroundService)"]
+        Controllers["REST API + /healthz + /api/openapi.json"]
         Repo["QuizRepositoryService + AuthService"]
         DB[("SQLite (arenaquiz.db)")]
     end
 
     Pages --> Components
-    Pages --> State
-    State -- "WebSockets / SignalR" --> Hub
-    State -- "HTTP JSON / CSV" --> Controllers
+    Pages --> ServicesClient
+    ServicesClient -- "SignalR WebSockets" --> Hub
+    ServicesClient -- "HTTP + Bearer JWT/HMAC" --> Controllers
+    Controllers --> Security
+    Controllers --> Repo
     Hub --> RoomSvc
+    Cleanup --> RoomSvc
     RoomSvc --> Engine
     RoomSvc --> Repo
-    Controllers --> Repo
     Repo --> DB
     Client -.-> Shared
     Server -.-> Shared
@@ -53,41 +57,43 @@ flowchart LR
 
 ---
 
-## Жизненный цикл раунда в SignalR
+## Жизненный цикл раунда в SignalR и защита от читерства
 
 ```mermaid
 sequenceDiagram
-    participant Host as Host (Browser WASM)
+    participant Host as Host (HostStudio / Projector)
     participant Hub as GameHub + GameRoomService (Server)
     participant Player as Players (Mobile/Desktop)
     participant DB as SQLite (EF Core)
 
     Host->>Hub: CreateRoom(quizId, mode, autoAdvance)
-    Hub-->>Host: RoomSnapshotDto (PIN: AQ4829)
+    Hub-->>Host: RoomSnapshotDto (PIN + secret HostControlToken)
     Player->>Hub: JoinRoom(PIN, Nickname, Team, ReconnectToken)
     Hub-->>Player: RoomSnapshotDto + ReconnectToken
     Hub-->>Host: PlayerJoined + RoomStateUpdated
 
-    Host->>Hub: StartGame(PIN)
-    Note over Hub: Server records QuestionStartedAtUtc & starts 1s Timer
-    Hub-->>Host: QuestionStarted(LiveQuestionViewDto — без правильного ответа!)
-    Hub-->>Player: QuestionStarted(LiveQuestionViewDto)
+    Host->>Hub: StartGame(PIN) [HostConnectionId verified]
+    Note over Hub: Records QuestionStartedAtUtc & starts 500ms wall-clock check
+    Hub-->>Host: QuestionStarted(LiveQuestionViewDto — NO CorrectOptionIndex)
+    Hub-->>Player: QuestionStarted(LiveQuestionViewDto — NO CorrectOptionIndex)
 
-    loop Every 1 second
-        Hub-->>Host: TimerTicked(remainingSeconds)
-        Hub-->>Player: TimerTicked(remainingSeconds)
+    opt Host pauses question
+        Host->>Hub: TogglePauseQuestion(PIN)
+        Hub-->>Host: PauseStateChanged(isPaused, remainingSeconds)
+        Hub-->>Player: PauseStateChanged(isPaused, remainingSeconds)
     end
 
     Player->>Hub: SubmitAnswer(PIN, playerId, qIndex, optionIndex)
-    Note over Hub: Anti-cheat: elapsedMs = UtcNow - QuestionStartedAtUtc
+    Note over Hub: Verifies Context.ConnectionId owns PlayerId<br/>elapsedMs = UtcNow - QuestionStartedAtUtc - TotalPausedDuration
     Hub-->>Player: AnswerSubmittedAck(serverElapsedMs)
+    Hub-->>Host: AnswerProgressUpdated(O(1) delta: answered/active)
 
-    Note over Hub: Timer == 0 OR all active players answered
-    Hub-->>Host: QuestionRevealed(correctIndex, voteCounts, leaderboard)
-    Hub-->>Player: QuestionRevealed(correctIndex, voteCounts, leaderboard)
+    Note over Hub: Wall-clock expires OR all active players answered
+    Hub-->>Host: QuestionRevealed(correctIndex, explanation, leaderboard)
+    Hub-->>Player: QuestionRevealed(correctIndex, explanation, leaderboard)
 
-    Host->>Hub: NextQuestion(PIN) (or Auto-Advance 5s)
-    Hub->>DB: SaveCompletedSessionAsync(SessionHistoryDto)
+    Host->>Hub: NextQuestion(PIN)
+    Hub->>DB: SaveCompletedSessionAsync + Upsert QuestionStats
     Hub-->>Host: GameEnded(SessionHistoryDto)
     Hub-->>Player: GameEnded(SessionHistoryDto)
 ```
@@ -99,6 +105,7 @@ sequenceDiagram
 ```mermaid
 erDiagram
     QuizEntity ||--o{ QuestionEntity : contains
+    QuizEntity ||--o{ QuestionStatEntity : tracks
     GameSessionEntity ||--o{ PlayerResultEntity : records
     QuizEntity {
         Guid Id PK
@@ -119,6 +126,14 @@ erDiagram
         int TimeLimitSeconds
         int BasePoints
         string Explanation
+    }
+    QuestionStatEntity {
+        Guid Id PK
+        Guid QuizId FK
+        Guid QuestionId
+        string PromptSnapshot
+        int TotalAttempts
+        int CorrectAttempts
     }
     GameSessionEntity {
         Guid Id PK
@@ -154,16 +169,68 @@ erDiagram
 
 ---
 
+## Безопасность, надёжность и оптимизация (v2.0)
+
+1. **Настоящий RBAC и криптография (`TokenService`, `ArenaBearerAuthHandler`)**:
+   - Пароли хэшируются с помощью **PBKDF2-SHA256** (100 000 итераций, 16-байтная случайная соль, сравнение через `CryptographicOperations.FixedTimeEquals`).
+   - Эндпоинты создания, редактирования и удаления квизов (`POST /api/quizzes`, `GET /api/quizzes/{id}/edit`, `PUT /api/quizzes/{id}`, `DELETE /api/quizzes/{id}`) защищены `[Authorize(Roles = "Host,Admin")]` и подписанными **HMAC-SHA256** Bearer-токенами.
+   - Клиент по умолчанию стартует с ролью `Guest Player` (`UserRole.Player`). Эндпоинт `/api/auth/quick-switch` разрешён строго для `Player`; повышение до `Host` требует парольной аутентификации через `/api/auth/login`.
+2. **Защита от утечки ответов**:
+   - Публичный эндпоинт `GET /api/quizzes/{id}` возвращает `QuizPublicPreviewDto` (`QuestionPublicDto`) — без `CorrectOptionIndex` и `Explanation`. Полная структура `QuizDetailDto` доступна только авторизованному `Host` на `/api/quizzes/{id}/edit`.
+3. **Защита SignalR Hub (`GameHub`, `GameRoomService`)**:
+   - Все управляющие действия хоста (`StartGame`, `TogglePauseQuestion`, `RevealCurrentQuestion`, `NextQuestion`, `RemovePlayer`) проверяют `room.HostConnectionId == callerConnectionId`.
+   - При обновлении вкладки хоста клиент автоматически вызывает `ReclaimHost(roomCode, hostControlToken)` с постоянным сравнением токена.
+   - `SubmitAnswer` и `SendReaction` привязаны к `Context.ConnectionId` (исключена подмена чужого `PlayerId` или ника), а реакции ограничены по частоте (не чаще 1 раза в 1.5 сек на соединение).
+   - Повторный вход под ником отключённого игрока без секретного `ReconnectToken` блокируется.
+4. **Надёжность и трафик**:
+   - **Wall-clock таймер**: проверка каждые 500 мс относительно `QuestionStartedAtUtc` и `TotalPausedDuration` исключает дрейф таймера и поддерживает паузу.
+   - **O(P) дельты вместо O(P²)**: при отправке ответов сервер рассылает компактный `AnswerProgressUpdated` (`AnsweredCount / TotalActivePlayers`) вместо повторной сериализации всего `RoomSnapshotDto`.
+   - **Фоновая очистка (`RoomCleanupHostedService`)**: каждые 2 минуты удаляет завершённые (`> 15 мин`) и брошенные (`> 30 мин`) комнаты и освобождает их таймеры.
+   - **Справедливый Knockout**: при случайном обрыве сети отключённый игрок не выбывает на таймауте вопроса; выбывают только подключённые игроки, давшие неверный ответ или не успевшие ответить вовремя.
+   - **Проекция в SQL**: `GetAllQuizSummariesAsync` выбирает количество вопросов прямо в SQL-проекции `.Select(...)` без загрузки текстов вопросов и вариантов ответа.
+
+---
+
 ## Анализ алгоритмической сложности (Big-O)
 
 | Операция | Реализация | Временная сложность | Пространственная сложность |
 |---|---|---|---|
-| Поиск комнаты по 6-значному PIN | `ConcurrentDictionary<string, ActiveRoomState>` | $O(1)$ в среднем | $O(R)$, где $R$ — число активных комнат |
-| Расчёт очков за ответ (`ScoreEngine.CalculateAnswerScore`) | Чистая функция без побочных эффектов | $O(1)$ | $O(1)$ |
-| Построение лидерборда (`ScoreEngine.ComputeLeaderboard`) | LINQ `OrderBy` / `ThenByDescending` (IntroSort) | $O(P \log P)$, где $P$ — число игроков в комнате | $O(P)$ |
-| Агрегация команд (`ScoreEngine.ComputeTeamStandings`) | LINQ `GroupBy` по `TeamSide` | $O(P + T \log T)$, где $T \le 3$ | $O(P)$ |
-| Балансировка команды (`ScoreEngine.AssignBalancedTeam`) | Подсчёт через `GroupBy` + выбор минимума | $O(P)$ | $O(T)$ |
-| Экспорт результатов в CSV (`ScoreEngine.BuildSessionCsv`) | Однопроходная сериализация RFC-4180 | $O(P)$ | $O(P)$ |
+| Поиск комнаты по 6-значному PIN | `ConcurrentDictionary<string, ActiveRoomState>` | $O(1)$ в среднем | $O(R)$, где $R$ — активные комнаты |
+| Расчёт очков за ответ (`ScoreEngine.CalculateAnswerScore`) | Чистая функция | $O(1)$ | $O(1)$ |
+| Уведомление о прогрессе ответов | `AnswerProgressDto` (дельта вместо полного снапшота) | $O(1)$ на сервере, $O(P)$ рассылка за вопрос | $O(1)$ |
+| Построение лидерборда (`ScoreEngine.ComputeLeaderboard`) | `OrderBy` / `ThenByDescending` | $O(P \log P)$ | $O(P)$ |
+| Агрегация команд (`ScoreEngine.ComputeTeamStandings`) | `GroupBy` по `TeamSide` | $O(P + T \log T), T \le 3$ | $O(P)$ |
+| Экспорт результатов в CSV (`ScoreEngine.BuildSessionCsv`) | Однопроходный RFC-4180 | $O(P)$ | $O(P)$ |
+
+---
+
+## Масштабирование (Честная архитектура)
+
+Сейчас `ActiveRoomState` и таймеры раундов (`System.Threading.Timer`) хранятся в памяти одного ASP.NET Core процесса (`ConcurrentDictionary`), что оптимально для одного сервера аудитории/университета без внешней инфраструктуры.  
+Для горизонтального масштабирования на несколько нод за балансировщиком одного лишь SignalR Redis Backplane **недостаточно** — потребуется:
+1. **SignalR Redis Backplane** (или **Azure SignalR Service**) для маршрутизации WebSocket-сообщений между серверами.
+2. **Вынос состояния комнат в Redis** (распределённые хэши/блокировки Redis вместо in-process `ConcurrentDictionary`) и перенос тиков таймера на распределённый воркер/отложенные задачи.
+3. **Миграция БД с SQLite на PostgreSQL** для конкурентной записи с нескольких инстансов.
+
+---
+
+## Руководство пользователя и API
+
+### Для ведущего (Host)
+1. Перейдите на `/auth`, введите учётные данные (`tamerlan` / `host123` или `dias` / `host123`) и нажмите **Sign In**.
+2. Откройте `/host` (**Host Studio**). Во вкладке **Quiz Editor** можно создавать новые квизы, загружать и редактировать существующие, менять порядок вопросов (`Up`/`Down`), дублировать, генерировать стартовые вопросы по теме, а также импортировать/экспортировать JSON.
+3. Во вкладке **Live Game Console** выберите квиз и режим (`Classic Speed`, `Team Battle`, `Knockout`), затем создайте комнату.
+4. Откройте **Projector View** для демонстрации гигантского PIN и SVG QR-кода аудитории. Во время вопроса можно нажать **Pause Timer** / **Resume Timer** или досрочно открыть правильный ответ (**Reveal Answer Now**).
+
+### Для игрока (Player)
+1. Отсканируйте QR-код с экрана ведущего или откройте `/` (или `/play`), введите 6-значный PIN и свой ник (можно также выбрать открытое лобби одним нажатием).
+2. Подключитесь с телефона, планшета или ноутбука. Переключатель темы (Light/Dark) и языка (`EN` / `RU` / `KZ`) доступен в верхней панели навигации.
+3. При потере Wi-Fi обновите страницу — сессия восстановится по `ReconnectToken` с сохранением набранных баллов.
+
+### Диагностика и эндпоинты
+- `GET /healthz` — Liveness Health Check сервера.
+- `GET /api/openapi.json` — Сводная OpenAPI 3.0.3 спецификация API.
+- `GET /api/sessions/{id}/export.csv` — Скачивание отчёта завершённой сессии в RFC-4180 CSV.
 
 ---
 
@@ -177,36 +244,9 @@ erDiagram
 dotnet restore ArenaQuiz.sln
 dotnet run --project ArenaQuiz/ArenaQuiz.csproj
 ```
-После запуска откройте адрес из консоли (например, `https://localhost:5001` или `http://localhost:5000`).  
-База данных `arenaquiz.db` создаётся и автоматически заполняется демонстрационными квизами, историей игр и аккаунтами (`tamerlan`/`host123`, `dias`/`host123`, `student`/`play123`) при первом старте.
+Демо-база `arenaquiz.db` автоматически создаётся и заполняется 3 квизами, историей игр, статистикой вопросов и аккаунтами (`tamerlan`/`host123`, `dias`/`host123`, `student`/`play123`).
 
-### Запуск автоматических тестов (xUnit + SQLite + bUnit)
+### Запуск тестов и покрытия кода (xUnit + bUnit + WebApplicationFactory + SignalR)
 ```bash
-dotnet test ArenaQuiz.sln --configuration Release --logger "console;verbosity=normal"
+dotnet test ArenaQuiz.sln --configuration Release --collect:"XPlat Code Coverage" --logger "console;verbosity=normal"
 ```
-
----
-
-## Соответствие критериям оценивания (20 × 5% = 100%)
-
-1. **Code Structure & Design**: Чёткое разделение `ArenaQuiz.Shared` / `ArenaQuiz` / `ArenaQuiz.Client` / `ArenaQuiz.Tests`, интерфейс `IGameRoomBroadcaster` (DIP), сервисный слой.
-2. **Component Reusability**: 6 изолированных компонентов (`QuestionCard`, `RoundTimer`, `LiveLeaderboard`, `PlayerRoster`, `TemplatedMetricGrid<TItem>`, `ConnectionStatusBanner`) с `[Parameter]` и `EventCallback<T>`.
-3. **Cross-Platform Compatibility**: Запускается на Windows, macOS, Linux (.NET 10) и в любом современном мобильном/десктопном браузере (WebAssembly).
-4. **State Management**: Централизованный `GameStateContainer` + `<CascadingValue Value="GameState" IsFixed="true">` + сохранение токена переподключения в `sessionStorage`.
-5. **User Interface (UI) Design**: Единая дизайн-система на CSS-переменных, высокая контрастность WCAG AA, табличные цифры (`tabular-nums`), SVG-иконки.
-6. **User Experience (UX)**: Мгновенный вход по 6-значному PIN с главной страницы, список открытых лобби, понятная обратная связь при ответах.
-7. **Responsiveness**: Адаптивная сетка (`aq-grid-2/3/4`) и медиа-запросы для экранов от 360px до 4K, удобные кнопки ответа от `60px` высоты на телефоне.
-8. **Core Functionality**: Создание квизов, запуск комнат, вход игроков, лобби, живой таймер, скорость-зависимые очки, лидерборд, подиум, история игр.
-9. **Advanced Features**: SignalR с типизированным хабом `Hub<IGameHubClient>`, 3 режима (`ClassicSpeed`, `TeamBattle`, `KnockoutElimination`), RBAC (`Host`/`Player`), WebAudio-звуки, RFC-4180 CSV-экспорт.
-10. **Error Handling & Resilience**: Функциональная монада `Result<T>`, автоматическое переподключение SignalR (`WithAutomaticReconnect`), восстановление сессии по `ReconnectToken`.
-11. **Efficiency**: Отдача `LiveQuestionViewDto` без лишних полей, `AsNoTracking()` в EF Core-запросах, минимальный трафик по WebSockets.
-12. **Scalability**: Потокобезопасное хранилище комнат `ConcurrentDictionary` с гранулярной блокировкой на комнату; готовность к Redis Backplane / Azure SignalR Service.
-13. **Resource Utilization**: Остановка и освобождение `System.Threading.Timer` по окончании раунда, отсутствие polling-запросов.
-14. **Testing Coverage**: Модульные тесты `ScoreEngineTests`, интеграционные тесты комнат `GameRoomServiceTests`, тесты SQLite `QuizRepositorySqliteTests`, тесты UI-компонентов `BlazorComponentsBunitTests`.
-15. **Quality Assurance**: Сборка в `Release` без ошибок, проверка эндпоинтов и ручная кросс-браузерная проверка на телефоне и ПК.
-16. **Documentation**: `README.md` с Mermaid-диаграммами, Big-O анализом, `docs/PRESENTATION_SLIDES.md`, `docs/DEFENSE_QA_GUIDE.md`, `docs/TEAM_GIT_WORKFLOW.md`.
-17. **Innovation**: Защита от читерства через серверный расчёт времени и скрытие индекса правильного ответа на клиенте + режим выбывания Knockout.
-18. **Creative Use of Blazor/C#/.NET Features**: Иммутабельные `record`-ы с `with`-выражениями, switch expressions, `Result<T>`, `RenderFragment<TItem>` (`TemplatedMetricGrid`), `CascadingValue`, WebAudio JS Interop.
-19. **Professionalism**: Чистый `.gitignore`, отсутствие мусора, воспроизводимый seed базы данных.
-20. **Presentation**: Готовая структура слайдов и шпаргалка ответов на вопросы комиссии в папке `docs/`.
-
