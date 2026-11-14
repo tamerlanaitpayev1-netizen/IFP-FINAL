@@ -211,9 +211,43 @@
       .grid-2, .grid-3 { grid-template-columns: 1fr; }
       .deck { padding: 1rem; }
     }
+    @page {
+      size: 13.333in 7.5in;
+      margin: 0;
+    }
     @media print {
-      .topbar, .controls { display: none; }
-      .slide { display: flex !important; page-break-after: always; }
+      html, body {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        background: var(--bg);
+        height: auto;
+      }
+      .deck {
+        display: block;
+        padding: 0;
+        max-width: none;
+        min-height: 0;
+      }
+      .topbar, .controls { display: none !important; }
+      .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+      .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+      .slide {
+        display: flex !important;
+        flex-direction: column;
+        justify-content: center;
+        gap: 1rem;
+        width: 13.333in;
+        height: 7.5in;
+        padding: 0.42in 0.55in;
+        animation: none !important;
+        overflow: hidden;
+        break-after: page;
+        page-break-after: always;
+      }
+      .slide:last-of-type {
+        break-after: auto;
+        page-break-after: auto;
+      }
     }
   </style>
 </head>
@@ -440,7 +474,7 @@
 
           <rect x="545" y="155" width="420" height="105" rx="10" fill="#FEF2F2" stroke="#D9381E" stroke-width="2"/>
           <rect x="545" y="155" width="420" height="28" rx="10" fill="#D9381E"/><text x="557" y="174" fill="#fff" font-weight="700" font-size="12">UserAccountEntity (RBAC Identity)</text>
-          <text x="557" y="200" font-size="12">Username (tamerlan, dias, student) · FullName · Role (Player=0, Host=1, Admin=2)</text>
+          <text x="557" y="200" font-size="10.5">Username (tamerlan, dias, student) · FullName · Role (0=Player, 1=Host, 2=Admin)</text>
           <text x="557" y="222" font-size="11" fill="#991B1B">PasswordHash: pbkdf2$100000$&lt;16B_Salt&gt;$&lt;32B_SHA256_Hash&gt;</text>
 
           <line x1="220" y1="70" x2="275" y2="70" stroke="#14161A" stroke-width="2"/>
