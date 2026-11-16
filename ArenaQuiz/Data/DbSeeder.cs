@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ArenaQuiz.Security;
 using ArenaQuiz.Shared.Models;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArenaQuiz.Data;
@@ -10,6 +11,14 @@ public static class DbSeeder
     public static async Task SeedAsync(ArenaDbContext db)
     {
         await db.Database.EnsureCreatedAsync();
+
+        if (await NeedsSchemaOrHashUpgradeAsync(db))
+        {
+            await db.Database.CloseConnectionAsync();
+            SqliteConnection.ClearAllPools();
+            await db.Database.EnsureDeletedAsync();
+            await db.Database.EnsureCreatedAsync();
+        }
 
         bool isProd = string.Equals(Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), "Production", StringComparison.OrdinalIgnoreCase);
         bool seedDemoInProd = Environment.GetEnvironmentVariable("ARENAQUIZ_SEED_DEMO") == "1";
@@ -297,5 +306,18 @@ public static class DbSeeder
                 WasEliminated = r.Eliminated
             }).ToList()
         };
+    }
+
+    private static async Task<bool> NeedsSchemaOrHashUpgradeAsync(ArenaDbContext db)
+    {
+        try
+        {
+            _ = await db.QuestionStats.AnyAsync();
+            return await db.Users.AnyAsync(u => !u.PasswordHash.StartsWith("pbkdf2$"));
+        }
+        catch
+        {
+            return true;
+        }
     }
 }
